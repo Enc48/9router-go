@@ -698,30 +698,40 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 
 	usage := translator.GetAndClearUsage(ctx)
 	if completed {
-		if !handlerutil.IsProbeContext(ctx) {
-			// Clear any existing model lock on success (matching Next.js clearAccountError).
-			lockKey := canonicalLockModel(provider, model)
-			if unlockErr := h.Repo.UnlockConnectionModel(connectionID, lockKey); unlockErr != nil {
-				log.Warn("fallback", "unlock failed", "provider", provider, "model", lockKey, "error", unlockErr)
-			}
-			if lockKey != model {
-				_ = h.Repo.UnlockConnectionModel(connectionID, model)
-			}
-			// A served request also clears the account-scoped cooldown, so an
-			// account that recovered is not kept out of rotation until the
-			// cooldown expires on its own.
-			if clearErr := h.Repo.ClearConnectionRateLimit(connectionID); clearErr != nil {
-				log.Warn("fallback", "rate limit clear failed", "conn", connectionID, "error", clearErr)
-			}
-			// A served request proves the account is usable again, so drop any
-			// cached quota block rather than leaving it to expire on its own.
-			if provider == "codex" {
-				ClearCodexQuotaBlock(connectionID)
-			}
-			// A served request proves the model is alive, so a badge recorded by
-			// an earlier 410 must not outlive it (#179).
-			h.clearModelDeprecation(provider, model)
+		// A dashboard "Test" probe (POST /api/models/test) is dispatched into
+		// this very handler, and it reaches the provider for real — but it is
+		// not operator traffic. Recording it wrote a usageHistory row and a
+		// byProvider bucket, so the probed provider appeared on the Usage
+		// Overview topology map having "served" a request nobody sent, and
+		// the daily totals counted a token bill that was never metered
+		// (#280). Every other probe side effect here is already gated on the
+		// context; this is the one that was not.
+		if handlerutil.IsProbeContext(ctx) {
+			fwdErr = nil
+			return nil
 		}
+		// Clear any existing model lock on success (matching Next.js clearAccountError).
+		lockKey := canonicalLockModel(provider, model)
+		if unlockErr := h.Repo.UnlockConnectionModel(connectionID, lockKey); unlockErr != nil {
+			log.Warn("fallback", "unlock failed", "provider", provider, "model", lockKey, "error", unlockErr)
+		}
+		if lockKey != model {
+			_ = h.Repo.UnlockConnectionModel(connectionID, model)
+		}
+		// A served request also clears the account-scoped cooldown, so an
+		// account that recovered is not kept out of rotation until the
+		// cooldown expires on its own.
+		if clearErr := h.Repo.ClearConnectionRateLimit(connectionID); clearErr != nil {
+			log.Warn("fallback", "rate limit clear failed", "conn", connectionID, "error", clearErr)
+		}
+		// A served request proves the account is usable again, so drop any
+		// cached quota block rather than leaving it to expire on its own.
+		if provider == "codex" {
+			ClearCodexQuotaBlock(connectionID)
+		}
+		// A served request proves the model is alive, so a badge recorded by
+		// an earlier 410 must not outlive it (#179).
+		h.clearModelDeprecation(provider, model)
 		if usage == nil {
 			usage = &translator.OpenAIUsage{}
 		}

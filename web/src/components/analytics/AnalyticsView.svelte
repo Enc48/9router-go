@@ -295,6 +295,16 @@
     const seen = new Set<string>()
     const list: { id: string; alias?: string; name: string; color?: string; type: string }[] = []
 
+    // "Who is on the bus" is a usage question, so every source below is
+    // measured against the same window. The backend keys usage by the
+    // canonical provider id, while a connection row can hold either that or
+    // the published alias, so both are tried before a provider counts as idle.
+    const usedInPeriod = (provId: string) => {
+      const canonical = provId.toLowerCase().trim()
+      const cat = PROVIDER_CATALOG.find((p) => p.id.toLowerCase() === canonical || p.alias?.toLowerCase() === canonical)
+      const keys = [canonical, cat?.id, cat?.alias].filter(Boolean) as string[]
+      return keys.some((k) => (stats.byProvider?.[k]?.requests || 0) > 0)
+    }
     const addProvider = (provId: string, type: string, customName?: string) => {
       if (!provId) return
       const canonical = provId.toLowerCase().trim()
@@ -331,9 +341,15 @@
       if (r.provider) addProvider(r.provider, 'recent')
     }
 
-    // 3. Add active user-configured connections
+    // 3. Add user-configured connections, but only the ones that actually
+    //    carried traffic in the selected window. Every non-inactive row used
+    //    to be drawn here, and since that list is not usage-windowed the node
+    //    outlived both the period and the connection itself: a provider the
+    //    operator had merely configured sat on the map indefinitely as if it
+    //    were serving (#280). Gating it on the same window as every other
+    //    source is what makes the map mean what it claims to mean.
     for (const c of connections) {
-      if (c.isActive !== 0 && c.provider) {
+      if (c.isActive !== 0 && c.provider && usedInPeriod(c.provider)) {
         addProvider(c.provider, 'connection', c.name || undefined)
       }
     }
@@ -351,8 +367,6 @@
     //    reads as "who is on the bus" — including ones never routed a request.
     //    Providers with real usage already entered above via stats.byProvider,
     //    so this only has to cover the ids whose usage key the map lacks.
-    const usedInPeriod = (provId: string) =>
-      (stats.byProvider?.[provId]?.requests || 0) > 0
     const FREE_DEFAULTS = ['antigravity', 'opencode', 'nvidia', 'openrouter', 'clinepass']
     for (const f of FREE_DEFAULTS) {
       if (usedInPeriod(f)) addProvider(f, 'default')

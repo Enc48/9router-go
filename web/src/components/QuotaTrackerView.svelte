@@ -25,6 +25,7 @@
   import Menu from '../lib/ui/Menu.svelte'
   import MenuItem from '../lib/ui/MenuItem.svelte'
   import { maxPanelWidth, placePanel, placementStyle } from '../lib/ui/menuPosition'
+  import { portal } from '../lib/ui/portal'
   import { getIconPath } from './connections/types'
   import EditConnectionModal, { type ConnectionUpdate } from './connections/EditConnectionModal.svelte'
   import QuotaTable from './quota/QuotaTable.svelte'
@@ -911,8 +912,13 @@
 
         {#if providerMenuOpen}
           <div
+            use:portal
             bind:this={providerDropdownPanel}
+            role="menu"
+            aria-label="Filter quota providers"
+            tabindex="-1"
             style={providerPanelStyle}
+            class="fixed z-50 w-max rounded-xl border border-border bg-surface p-1.5 shadow-[var(--shadow-elev)]"
           >
             <button
               type="button"

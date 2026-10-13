@@ -116,14 +116,19 @@ func TestRenderSystemdUnit(t *testing.T) {
 		}
 	})
 
-	// The unit is written for systemd, so a path separator must never be a
-	// backslash: filepath.Dir on a Windows test runner returns \usr\local\bin,
-	// which the previous assertion could not express.
-	t.Run("working directory is slash-separated on every runner", func(t *testing.T) {
+	// The unit is written for systemd, so its directory must be a POSIX path on
+	// every runner. filepath.Dir returns backslashes on Windows, and without
+	// filepath.ToSlash the rendered unit carried `\usr\local\bin` — a path
+	// systemd cannot resolve. Asserting the absence of a backslash states the
+	// contract instead of a literal only one platform can produce, which is how
+	// this subtest passed on Windows and failed on Linux.
+	t.Run("working directory carries no backslash on any runner", func(t *testing.T) {
 		t.Setenv("DATA_DIR", "")
-		unit := renderSystemdUnit(`/usr/local/bin\9router-go`, nil)
-		if !strings.Contains(unit, `WorkingDirectory="/usr/local/bin"`) {
-			t.Errorf("WorkingDirectory must be a POSIX path:\n%s", unit)
+		unit := renderSystemdUnit("/usr/local/bin/9router-go", nil)
+		for _, line := range strings.Split(unit, "\n") {
+			if strings.HasPrefix(line, "WorkingDirectory=") && strings.Contains(line, `\`) {
+				t.Errorf("WorkingDirectory must be slash-separated on every runner: %s", line)
+			}
 		}
 	})
 }

@@ -116,9 +116,14 @@ jobs:
         with:
           bun-version: 1.4.2
 
+      # `bun install` is not optional: the build script runs `tsc`, which lives
+      # in node_modules, so without it the job failed at "bun: command not
+      # found: tsc" before a single Go test ran.
       - name: Build Web SPA
         working-directory: web
-        run: bun run build
+        run: |
+          bun install --frozen-lockfile
+          bun run build
 
       - name: Set up Go
         uses: actions/setup-go@v5

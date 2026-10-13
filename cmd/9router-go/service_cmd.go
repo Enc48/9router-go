@@ -77,7 +77,7 @@ func serviceStart(cCtx *cli.Context) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("9router-go started via %s (active: %v, starts on boot)\n", info.Backend, info.Active)
+	fmt.Printf("9router-go started via %s (%s, starts on boot)\n", info.Backend, activeState(info))
 	return nil
 }
 
@@ -105,7 +105,7 @@ func serviceRestart(cCtx *cli.Context) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("9router-go restarted via %s (active: %v)\n", info.Backend, info.Active)
+	fmt.Printf("9router-go restarted via %s (%s)\n", info.Backend, activeState(info))
 	return nil
 }
 
@@ -142,6 +142,17 @@ func serviceStatus(_ *cli.Context) error {
 		fmt.Printf("  Inspect: %s\n", hint)
 	}
 	return nil
+}
+
+// activeState renders the active flag for one-line output. An unanswered
+// probe is reported as unknown rather than as false: start and restart re-probe
+// through Status, so they inherit the same uncertainty that `service status`
+// states explicitly.
+func activeState(info service.Info) string {
+	if info.ActiveUnknown {
+		return "active: unknown"
+	}
+	return fmt.Sprintf("active: %v", info.Active)
 }
 
 // inspectHint prints the native command that introspects the backend entry.

@@ -43,7 +43,7 @@ func renderSystemdUnit(exe string, args []string) string {
 	b.WriteString("Type=simple\n")
 	b.WriteString("ExecStart=" + commandLine(exe, args) + "\n")
 	if dir := filepath.Dir(exe); dir != "" {
-		b.WriteString("WorkingDirectory=" + dir + "\n")
+		b.WriteString("WorkingDirectory=" + quoteSystemdValue(filepath.ToSlash(dir)) + "\n")
 	}
 	if dataDir := strings.TrimSpace(os.Getenv("DATA_DIR")); dataDir != "" {
 		b.WriteString("Environment=" + quoteArg("DATA_DIR="+dataDir) + "\n")
@@ -52,6 +52,40 @@ func renderSystemdUnit(exe string, args []string) string {
 	b.WriteString("RestartSec=3\n\n")
 	b.WriteString("[Install]\n")
 	b.WriteString("WantedBy=default.target\n")
+	return b.String()
+}
+
+// quoteSystemdValue renders a value for a systemd assignment that supports
+// quoting. It differs from quoteArg, which targets POSIX *shell* command
+// lines: systemd does not tokenise on whitespace, it only unquotes, so a
+// value is always wrapped and only the characters its unquoter interprets
+// are escaped.
+//
+// Two escapes matter here. Inside double quotes systemd processes C-style
+// escapes, so a backslash and a quote must be doubled, otherwise a path
+// ending in `\` escapes the closing quote and swallows the rest of the line.
+// And every assignment is specifier-expanded, so `%` must be written `%%`:
+// a binary under /opt/100%-uptime/ would otherwise expand to a unit that
+// names a different, almost certainly nonexistent, directory.
+//
+// A literal newline cannot be represented — it would end the assignment —
+// but a path from os.Executable cannot contain one.
+func quoteSystemdValue(value string) string {
+	var b strings.Builder
+	b.WriteByte('"')
+	for _, r := range value {
+		switch r {
+		case '\\':
+			b.WriteString(`\\`)
+		case '"':
+			b.WriteString(`\"`)
+		case '%':
+			b.WriteString("%%")
+		default:
+			b.WriteRune(r)
+		}
+	}
+	b.WriteByte('"')
 	return b.String()
 }
 
@@ -87,6 +121,7 @@ func installSystemd(exe string, args []string) (Info, error) {
 	// success when the job is queued, even if the process then exits.
 	if _, err := systemctl("start", unitName); err != nil {
 		info.Active = systemctlActive()
+		tryEnableLinger()
 		return info, nil
 	}
 	info.Active = waitSystemdActive()

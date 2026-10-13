@@ -95,6 +95,40 @@ jobs:
         working-directory: web
         run: bun run e2e
 
+  # `internal/service` picks which init system owns the gateway on the running
+  # machine, so it is the one package full of runtime.GOOS branches — and the
+  # one CI structurally could not see, since every job ran ubuntu-latest. Three
+  # of its tests failed on Windows while the Linux runner stayed green
+  # (issue #304): a WorkingDirectory assertion that could not express a native
+  # path, and two that needed symlink privilege. Scoped to this package so the
+  # job stays cheap; the goal is catching OS-conditional regressions, not
+  # running the whole suite twice.
+  windows-service:
+    name: Service tests (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # web/dist must exist before any Go package compiles: go test builds the
+      # module graph, and web/embed.go has no files to embed without it.
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+
+      - name: Build Web SPA
+        working-directory: web
+        run: bun run build
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.27"
+          cache: true
+
+      - name: Test service package
+        run: go test -count=1 ./internal/service/
+
   # The `test` job above runs `go test ./...` without -race, so a data race
   # could merge green and only surface on a user's machine under load. The
   # gateway's shared state is exactly the kind that races: the in-memory usage

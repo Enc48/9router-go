@@ -232,6 +232,7 @@ func TestInstallRunitRootActivatesTheService(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(runitSystemLink), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	links := stubLinks(t)
 	stubHost(t, hostStub{goos: "linux", euid: 0})
 	calls := stubRun(t)
 
@@ -242,8 +243,15 @@ func TestInstallRunitRootActivatesTheService(t *testing.T) {
 	if !fileExists(filepath.Join(runitSystemDir, "run")) {
 		t.Fatalf("run script not written under %s", runitSystemDir)
 	}
-	if !fileExists(runitSystemLink) {
-		t.Fatalf("activation symlink not created at %s", runitSystemLink)
+	// The activation symlink is what makes runsv pick the service up, so this
+	// is the whole point of the root branch. It is asserted as a request
+	// rather than a file: an unelevated Windows runner cannot create one, and
+	// failing there left the path uncovered on every Windows machine.
+	if len(links.created) != 1 || links.created[0] != runitSystemLink {
+		t.Errorf("activation symlink requests = %v, want [%s]", links.created, runitSystemLink)
+	}
+	if links.links && !fileExists(runitSystemLink) {
+		t.Errorf("activation symlink not created at %s", runitSystemLink)
 	}
 	if !info.Active {
 		t.Errorf("Info.Active = false, want true when sv start succeeds")
@@ -341,11 +349,15 @@ func TestUninstallRunit(t *testing.T) {
 	t.Run("root removes the activation symlink", func(t *testing.T) {
 		redirectInitPaths(t)
 		stubHost(t, hostStub{goos: "linux", euid: 0})
+		links := stubLinks(t)
 		writeFile(t, filepath.Join(runitSystemDir, "run"), "#!/bin/sh\n")
 		if err := os.MkdirAll(filepath.Dir(runitSystemLink), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.Symlink(runitSystemDir, runitSystemLink); err != nil {
+		// Provision the activation link through the seam rather than a bare
+		// os.Symlink: creating one needs SeCreateSymbolicLinkPrivilege, so this
+		// line failed on every unelevated Windows runner.
+		if err := symlink(runitSystemDir, runitSystemLink); err != nil {
 			t.Fatal(err)
 		}
 		stubRun(t)
@@ -353,7 +365,12 @@ func TestUninstallRunit(t *testing.T) {
 		if _, ok := uninstallRunit(); !ok {
 			t.Fatal("uninstallRunit() = false, want true")
 		}
-		if fileExists(runitSystemLink) {
+		// A leftover activation link keeps runsv starting the service, so the
+		// uninstall is only honest once it is removed too.
+		if !slices.Contains(links.removed, runitSystemLink) {
+			t.Errorf("removal requests = %v, want %s", links.removed, runitSystemLink)
+		}
+		if links.links && fileExists(runitSystemLink) {
 			t.Errorf("activation symlink still present at %s", runitSystemLink)
 		}
 	})

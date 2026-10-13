@@ -140,4 +140,26 @@ func TestUninstallCron(t *testing.T) {
 			t.Error("uninstallCron() = true with no entry, want false")
 		}
 	})
+
+	// The crontab entry is gone but the desktop entry survived, so the gateway
+	// would still autostart at the next graphical login. Reporting success
+	// there told the user something untrue; this pins the removal as the
+	// source of truth, the rule launchd and OpenRC already follow.
+	t.Run("a desktop entry that survives removal is not reported as uninstalled", func(t *testing.T) {
+		home := setHome(t)
+		stubCrontab(t, "")
+		stubRun(t)
+		desktop := filepath.Join(home, ".config", "autostart", "9router-go.desktop")
+		writeFile(t, desktop, renderAutostartDesktop("/usr/local/bin/9router-go", nil))
+		previousRemove := remove
+		remove = func(string) error { return errors.New("permission denied") }
+		t.Cleanup(func() { remove = previousRemove })
+
+		if _, ok := uninstallCron(); ok {
+			t.Error("uninstallCron() = true although the desktop entry survived")
+		}
+		if !fileExists(desktop) {
+			t.Error("test setup: the desktop entry should still be present")
+		}
+	})
 }

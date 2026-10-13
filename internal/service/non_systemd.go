@@ -134,7 +134,7 @@ func installRunit(exe string, args []string) (Info, error) {
 	}
 	info := Info{Backend: BackendRunit, Path: runPath, Exec: commandLine(exe, args), Enabled: true}
 	if geteuid() == 0 {
-		_ = os.Symlink(dir, runitSystemLink)
+		_ = symlink(dir, runitSystemLink)
 		if _, err := run("sv", "start", "9router-go"); err == nil {
 			info.Active = true
 		}
@@ -157,16 +157,16 @@ func uninstallRunit() (Info, bool) {
 	}
 	if geteuid() == 0 {
 		_, _ = run("sv", "stop", "9router-go")
-		_ = os.Remove(runitSystemLink)
+		_ = remove(runitSystemLink)
 	} else {
 		_, _ = run("sv", "stop", dir)
 	}
 	// The run script is the entry: keep the failure honest so Status still
 	// reports the service instead of claiming a removal that never happened.
-	if err := os.Remove(runPath); err != nil {
+	if err := remove(runPath); err != nil {
 		return Info{}, false
 	}
-	_ = os.Remove(dir)
+	_ = remove(dir)
 	return Info{Backend: BackendRunit, Path: runPath}, true
 }
 

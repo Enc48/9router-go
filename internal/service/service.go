@@ -57,6 +57,13 @@ var (
 		st, err := os.Stat(path)
 		return err == nil && st.IsDir()
 	}
+	// symlink and remove back the two filesystem calls the autostart entry
+	// lifecycle needs. They are seams for the same reason as the rest of this
+	// block: creating a symlink on Windows requires SeCreateSymbolicLinkPrivilege,
+	// which an unelevated runner does not hold, and a removal that cannot
+	// happen is exactly the case the uninstall paths must report honestly.
+	symlink = os.Symlink
+	remove  = os.Remove
 )
 
 // Info describes an installed (or just-installed) autostart entry.
@@ -66,6 +73,11 @@ type Info struct {
 	Exec    string
 	Enabled bool
 	Active  bool
+	// ActiveUnknown is set when the backend could not be interrogated, so
+	// Active carries no information. Printing the zero value as "not running"
+	// would state as fact what is only an unanswered question, which is how the
+	// Windows task status stayed wrong on a non-English locale.
+	ActiveUnknown bool
 }
 
 // Install writes the autostart entry for this machine's init system and

@@ -136,27 +136,45 @@ func TestInstallWindowsTaskErrorPaths(t *testing.T) {
 
 func TestStatusWindowsTask(t *testing.T) {
 	tests := []struct {
-		name    string
-		out     string
-		err     error
-		wantOK  bool
-		wantAct bool
+		name     string
+		state    string
+		probeErr error
+		wantOK   bool
+		wantAct  bool
+		wantUnk  bool
 	}{
-		{name: "task present and running", out: windowsTaskName + "  Running", wantOK: true, wantAct: true},
-		{name: "task present but ready", out: windowsTaskName + "  Ready", wantOK: true, wantAct: false},
-		{name: "query error", err: errors.New("no task"), wantOK: false},
+		{name: "task present and running", state: "4", wantOK: true, wantAct: true},
+		// Ready is ordinal 3. Matching the string "Running" instead of the
+		// ordinal is what made this report false on a non-English Windows.
+		{name: "task present but ready", state: "3", wantOK: true, wantAct: false},
+		{name: "task disabled", state: "1", wantOK: true, wantAct: false},
+		{name: "query error", probeErr: errors.New("no task"), wantOK: false},
+		// PowerShell absent or blocked: the entry exists, but its state does
+		// not. Reporting Active: false there would be a guess stated as fact.
+		{name: "unprobeable state is reported as unknown", state: "", wantOK: true, wantUnk: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			stubHost(t, hostStub{goos: "windows"})
-			stubRunFunc(t, func(string, ...string) (string, error) { return tt.out, tt.err })
+			stubRunFunc(t, func(name string, args ...string) (string, error) {
+				if tt.probeErr != nil {
+					return "", tt.probeErr
+				}
+				if strings.Contains(name, "powershell") {
+					return tt.state, nil
+				}
+				return windowsTaskName + "  Ready", nil
+			})
 
 			info, ok := statusWindowsTask()
 			if ok != tt.wantOK {
 				t.Fatalf("statusWindowsTask() ok = %v, want %v", ok, tt.wantOK)
 			}
-			if ok && info.Active != tt.wantAct {
-				t.Errorf("Info.Active = %v, want %v", info.Active, tt.wantAct)
+			if !ok {
+				return
+			}
+			if info.Active != tt.wantAct || info.ActiveUnknown != tt.wantUnk {
+				t.Errorf("Active = %v, ActiveUnknown = %v, want %v, %v", info.Active, info.ActiveUnknown, tt.wantAct, tt.wantUnk)
 			}
 		})
 	}

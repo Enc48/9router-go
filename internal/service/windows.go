@@ -96,5 +96,40 @@ func statusWindowsTask() (Info, bool) {
 	if err != nil || !strings.Contains(out, windowsTaskName) {
 		return Info{}, false
 	}
-	return Info{Backend: BackendWindowsTask, Path: windowsTaskName, Enabled: true, Active: strings.Contains(out, "Running")}, true
+	active, known := windowsTaskRunning(windowsTaskName)
+	return Info{
+		Backend:       BackendWindowsTask,
+		Path:          windowsTaskName,
+		Enabled:       true,
+		Active:        active,
+		ActiveUnknown: !known,
+	}, true
+}
+
+// windowsTaskRunning states whether the task is executing right now. It asks
+// PowerShell for the TaskState as a number instead of matching "Running" in
+// schtasks output, which is localised: on a non-English Windows that literal
+// never appears, so `service status` reported Active: false for a task that
+// was running. Casting the enum to int is itself locale-independent — the
+// enum's ordinal values (Running=4) are fixed by the CIM type, not by the UI
+// language, and PS 5.1 ships on every supported Windows.
+//
+// known is false when the probe itself could not answer — PowerShell missing,
+// or blocked by execution policy. The caller then reports an unknown active
+// state rather than the false that an absent probe used to imply.
+func windowsTaskRunning(name string) (active, known bool) {
+	quoted := strings.ReplaceAll(name, "'", "''")
+	query := "(Get-ScheduledTask -TaskName '" + quoted + "' -ErrorAction SilentlyContinue).State"
+	script := "$s = " + query + "; if ($null -eq $s) { '' } else { [int]$s }"
+	out, err := run("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script)
+	if err != nil {
+		return false, false
+	}
+	state := strings.TrimSpace(out)
+	if state == "" {
+		// The task vanished between the schtasks query and this probe.
+		return false, false
+	}
+	// TaskState.Running is ordinal 4 in the CIM ScheduledTask type.
+	return state == "4", true
 }

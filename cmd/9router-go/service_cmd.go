@@ -28,6 +28,8 @@ func serviceInstall(cCtx *cli.Context) error {
 	fmt.Printf("  Entry:   %s\n", info.Path)
 	fmt.Printf("  Command: %s\n", info.Exec)
 	switch {
+	case info.ActiveUnknown:
+		fmt.Println("  State:   enabled — its current state could not be read on this system.")
 	case info.Active:
 		fmt.Println("  State:   enabled and running — it will start automatically on boot.")
 	case info.Enabled:
@@ -131,7 +133,11 @@ func serviceStatus(_ *cli.Context) error {
 		fmt.Printf("  Command: %s\n", info.Exec)
 	}
 	fmt.Printf("  Enabled: %v\n", info.Enabled)
-	fmt.Printf("  Active:  %v\n", info.Active)
+	if info.ActiveUnknown {
+		fmt.Println("  Active:  unknown (this backend could not be interrogated)")
+	} else {
+		fmt.Printf("  Active:  %v\n", info.Active)
+	}
 	if hint := inspectHint(info.Backend); hint != "" {
 		fmt.Printf("  Inspect: %s\n", hint)
 	}

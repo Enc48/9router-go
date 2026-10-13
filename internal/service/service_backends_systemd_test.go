@@ -141,6 +141,54 @@ func TestControlSystemd(t *testing.T) {
 	})
 }
 
+// Linger is what keeps the unit alive after logout, and it was only reached
+// when `systemctl start` succeeded — the early return on the failure path
+// skipped it. A failed start is exactly the case install exists for: the
+// gateway already holds the port from `9router-go start`, the unit still
+// boots, and losing linger there killed it at logout while the CLI reported
+// the entry as enabled.
+func TestInstallSystemdEnablesLingerOnBothPaths(t *testing.T) {
+	tests := []struct {
+		name    string
+		failOn  string
+		wantRun bool
+	}{
+		{name: "start succeeds", wantRun: true},
+		{name: "start fails", failOn: "start", wantRun: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setHome(t)
+			t.Setenv("USER", "bima")
+			calls := stubRunFunc(t, func(name string, args ...string) (string, error) {
+				if name == "loginctl" {
+					return "", nil
+				}
+				for _, a := range args {
+					if a == tt.failOn {
+						return "", errors.New("boom")
+					}
+				}
+				return "", nil
+			})
+
+			if _, err := installSystemd("/usr/local/bin/9router-go", nil); err != nil {
+				t.Fatalf("installSystemd() error = %v", err)
+			}
+
+			idx := -1
+			for i, c := range *calls {
+				if c.name == "loginctl" && slices.Contains(c.args, "enable-linger") {
+					idx = i
+				}
+			}
+			if tt.wantRun && idx < 0 {
+				t.Errorf("calls = %v, want a loginctl enable-linger", *calls)
+			}
+		})
+	}
+}
+
 func TestLogHint(t *testing.T) {
 	if got := logHint(); !strings.Contains(got, "journalctl --user") {
 		t.Errorf("logHint() = %q, want the user journal", got)

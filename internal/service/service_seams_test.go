@@ -120,6 +120,49 @@ func stubWindowsTaskUser(t *testing.T, user string) {
 	t.Cleanup(func() { windowsTaskUser = previous })
 }
 
+// linkStub records the symlink and removal calls the runit backend makes.
+// It still performs them for real when the runner allows it, so assertions
+// about the resulting filesystem keep working on Linux; on Windows, where
+// creating a symlink needs SeCreateSymbolicLinkPrivilege, the real call is
+// skipped and only the request is recorded. That keeps the runit activation
+// path covered on every runner instead of skipped outright.
+type linkStub struct {
+	created []string
+	removed []string
+	links   bool
+}
+
+func stubLinks(t *testing.T) *linkStub {
+	t.Helper()
+	previousSymlink, previousRemove := symlink, remove
+	stub := &linkStub{links: probeSymlink(t)}
+	symlink = func(oldname, newname string) error {
+		stub.created = append(stub.created, newname)
+		if !stub.links {
+			return nil
+		}
+		return previousSymlink(oldname, newname)
+	}
+	remove = func(path string) error {
+		stub.removed = append(stub.removed, path)
+		return previousRemove(path)
+	}
+	t.Cleanup(func() { symlink, remove = previousSymlink, previousRemove })
+	return stub
+}
+
+// probeSymlink reports whether this runner can create a symlink, by trying it
+// in a temp dir rather than assuming from the OS: developer mode, elevated
+// shells and CI images differ.
+func probeSymlink(t *testing.T) bool {
+	t.Helper()
+	target := filepath.Join(t.TempDir(), "target")
+	if err := os.WriteFile(target, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return os.Symlink(target, filepath.Join(t.TempDir(), "link")) == nil
+}
+
 func writeFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

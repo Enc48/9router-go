@@ -58,19 +58,33 @@ func installCron(exe string, args []string) (Info, error) {
 
 func uninstallCron() (Info, bool) {
 	removedCrontab := removeCronEntry()
-	desktopRemoved := false
-	if path := autostartDesktopPath(); path != "" {
-		if _, err := os.Stat(path); err == nil {
-			if data, err := os.ReadFile(path); err == nil && strings.Contains(string(data), cronMarker) {
-				_ = os.Remove(path)
-				desktopRemoved = true
-			}
-		}
-	}
+	desktopRemoved := removeOwnedDesktopEntry()
 	if !removedCrontab && !desktopRemoved {
 		return Info{}, false
 	}
 	return Info{Backend: BackendCron, Path: "crontab (@reboot)"}, true
+}
+
+// removeOwnedDesktopEntry deletes the autostart .desktop file, but only when
+// this package wrote it, and it reports removal as the source of truth — the
+// rule the launchd and OpenRC backends already follow. A file that survived
+// (locked, permission denied) still fires at the next graphical login, so
+// reporting it as removed told the user something untrue.
+func removeOwnedDesktopEntry() bool {
+	path := autostartDesktopPath()
+	if path == "" {
+		return false
+	}
+	if _, err := os.Stat(path); err != nil {
+		return false
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || !strings.Contains(string(data), cronMarker) {
+		// Not written by this package, or unreadable: leave the user's own
+		// autostart entry alone.
+		return false
+	}
+	return remove(path) == nil
 }
 
 func statusCron() (Info, bool) {

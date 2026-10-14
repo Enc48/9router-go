@@ -85,6 +85,42 @@ describe('api key row menu', () => {
   })
 })
 
+describe('copying a key', () => {
+  // Issue #310. The copy button used to copy whatever the cell displayed, and a
+  // hidden cell displays the mask — so copying straight off a loaded dashboard
+  // put `sk-c07…c93e` on the clipboard and the pasted credential 401'd.
+  //
+  // The assertion is the clipboard text itself rather than a flag or a call:
+  // the user's whole complaint is the bytes that land on the clipboard, and the
+  // second check turns those bytes into the thing the user actually does with
+  // them — authenticate.
+  test('copies the usable secret while the row is still hidden', async () => {
+    const key = await createKey(page, 'E2E Copy Hidden')
+
+    // The key must not be revealed: revealing first is the workaround the
+    // reporter found, and it would hide the bug from this test.
+    const displayed = await keyRow(page, key).locator('code').innerText()
+    expect(displayed).toContain('…')
+
+    await app.page.context().grantPermissions(['clipboard-read', 'clipboard-write'])
+    await keyRow(page, key).getByRole('button', { name: `Copy key ${key}` }).click()
+    await app.page.waitForTimeout(300)
+
+    const copied = await app.page.evaluate(() => navigator.clipboard.readText())
+
+    // A mask is unusable as a credential; the secret starts with `sk-`.
+    expect(copied).not.toContain('…')
+    expect(copied).not.toBe(displayed)
+    expect(copied.startsWith('sk-')).toBe(true)
+
+    // The end of the user story: the pasted value has to work.
+    const res = await fetch(`${app.baseURL}/v1/models`, {
+      headers: { Authorization: `Bearer ${copied}` },
+    })
+    expect(res.status).toBe(200)
+  })
+})
+
 describe('api key batch bar', () => {
   test('pauses every selected key at once', async () => {
     const a = await createKey(page, 'E2E Batch A')

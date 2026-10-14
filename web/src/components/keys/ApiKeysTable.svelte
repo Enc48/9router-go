@@ -62,9 +62,32 @@
     return secretOf(k) !== ''
   }
 
+  // What the cell renders. Revealed, it is the plaintext; hidden, it is the
+  // row's own mask, so a hidden cell never renders a usable credential.
   function renderedKey(k: APIKey): string {
     if (shownKeyIds.has(k.id)) return secretOf(k) || k.keyDisplay || ''
     return k.keyDisplay || secretOf(k)
+  }
+
+  // Issue #310: Copy used to take `renderedKey`, which resolves to the masked
+  // `keyDisplay` for every row that was not already revealed — so copying a key
+  // straight off a freshly loaded dashboard put `sk-c07…c93e` on the clipboard
+  // and the pasted credential 401'd. Copying a secret must not depend on whether
+  // it happened to be on screen, so it reads the plaintext and ignores the
+  // reveal state.
+  //
+  // A row with no plaintext (an engine-key caller, or a pre-#199 row whose
+  // secret was hashed away) has nothing to copy. Falling back to the mask would
+  // put an unusable string on the clipboard silently, so it is reported instead.
+  async function handleCopy(k: APIKey) {
+    const secret = secretOf(k)
+    if (!secret) {
+      notifications.error(
+        'The full key for this entry is not stored, so it cannot be copied. Regenerate it to get a usable secret.',
+      )
+      return
+    }
+    await copy(secret, k.id)
   }
 
   function maskSecret(value: string): string {
@@ -314,7 +337,7 @@
 
         <button
           type="button"
-          onclick={() => copy(renderedKey(k), k.id)}
+          onclick={() => handleCopy(k)}
           class="shrink-0 p-1.5 rounded hover:bg-surface-2 text-text-muted hover:text-brand-500 transition-colors cursor-pointer"
           aria-label={`Copy key ${k.name || ''}`}
           title="Copy key"

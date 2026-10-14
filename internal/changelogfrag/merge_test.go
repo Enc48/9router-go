@@ -152,6 +152,30 @@ func TestMerge(t *testing.T) {
 			"## [v1.9.9] - 2026-10-01",
 		})
 	})
+
+	// Entry bodies quote the old marker when they describe the shared-section
+	// workflow ("every PR wrote under `## [Unreleased]`"). A substring search
+	// mistakes that mention for the section: the release landed mid-paragraph,
+	// the quoted text was replaced, and no version heading was created.
+	t.Run("a quoted [Unreleased] mention is not a section", func(t *testing.T) {
+		root := newRepo(t, map[string]string{
+			"CHANGELOG.md":         "# Changelog\n\n## [v1.9.9] - 2026-10-01\n\nEvery PR wrote under `## [Unreleased]` back then.\n",
+			".changes/219-chat.md": "### chat fix",
+		})
+
+		got, err := Merge(root, "v1.9.11", mergeTime)
+		if err != nil {
+			t.Fatalf("Merge: %v", err)
+		}
+
+		assertOrder(t, got, []string{
+			"# Changelog",
+			"## [v1.9.11] - 2026-10-09",
+			"### chat fix",
+			"## [v1.9.9] - 2026-10-01",
+			"Every PR wrote under `## [Unreleased]` back then.",
+		})
+	})
 }
 
 func TestApplyMerge(t *testing.T) {

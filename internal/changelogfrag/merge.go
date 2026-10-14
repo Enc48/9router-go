@@ -95,7 +95,7 @@ func ApplyMerge(root, tag string, now time.Time) error {
 // would leave the file starting with `## [v1.9.11]` and permanently drop the
 // title the dashboard modal renders above everything else.
 func insertRelease(changelog, release string) string {
-	at := strings.Index(changelog, unreleasedHeading)
+	at := unreleasedHeadingIndex(changelog)
 	if at < 0 {
 		if end, ok := titleEnd(changelog); ok {
 			return strings.TrimRight(changelog[:end], "\n") + "\n\n" + release + "\n\n" + strings.TrimLeft(changelog[end:], "\n")
@@ -117,7 +117,7 @@ func insertRelease(changelog, release string) string {
 // next `## ` heading. It reports false when there is no such section or when it
 // is empty, and either way the merge proceeds with just the fragments.
 func unreleasedBody(changelog string) (string, bool) {
-	at := strings.Index(changelog, unreleasedHeading)
+	at := unreleasedHeadingIndex(changelog)
 	if at < 0 {
 		return "", false
 	}
@@ -128,6 +128,23 @@ func unreleasedBody(changelog string) (string, bool) {
 	}
 	body := strings.TrimSpace(rest)
 	return body, body != ""
+}
+
+// unreleasedHeadingIndex returns the offset of the `## [Unreleased]` heading
+// line, or -1. The match is line-anchored on purpose: entry bodies quote the
+// marker when they describe the old shared-section workflow
+// (e.g. "every PR wrote under `## [Unreleased]`"), and a substring search
+// mistakes such a mention for the section itself — which once replaced the
+// quoted text with a whole release mid-paragraph and left no version heading.
+func unreleasedHeadingIndex(changelog string) int {
+	offset := 0
+	for _, line := range strings.SplitAfter(changelog, "\n") {
+		if strings.TrimRight(line, "\r\n \t") == unreleasedHeading {
+			return offset
+		}
+		offset += len(line)
+	}
+	return -1
 }
 
 // titleEnd reports the offset just past the changelog's H1 title. A changelog

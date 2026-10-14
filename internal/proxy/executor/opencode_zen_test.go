@@ -2,8 +2,7 @@ package executor
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
+	json "encoding/json/v2"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +10,7 @@ import (
 	"testing"
 
 	"9router/proxy/internal/providers"
+	"9router/proxy/internal/proxy"
 	"9router/proxy/internal/translator"
 )
 
@@ -326,38 +326,62 @@ func TestNormalizeZenResponsesBody_ReasoningShapes(t *testing.T) {
 	}
 }
 
-// Free-tier zen models moved off /zen/v1 with the OpenCode v2 inference gate
-// (decolua/9router#4842). A free chat-lane model must dial /inference/v1
-// while a paid one keeps /zen/v1, and the connection's key still rides along.
-func TestForwardOpencodeZen_FreeModelTakesInferenceGate(t *testing.T) {
-	for _, tc := range []struct {
-		name  string
+// The keyed zen lane stays on /zen/v1 with the v1 identity for every model —
+// including ids proposed for the inference gate elsewhere. Upstream
+// decolua/9router#4842 moves only the keyless free executor and leaves
+// opencode-zen (endpoints, UA, client, fingerprint) untouched, so a keyed
+// request must never be rerouted to the keyless gate.
+func TestForwardOpencodeZen_KeyedLaneStaysOnZenV1(t *testing.T) {
+	tests := []struct {
 		model string
-		lane  string
 		want  string
+		reply func(w http.ResponseWriter)
 	}{
-		{"free chat model", "deepseek-v4-flash-free", "/chat/completions", "/inference/v1/chat/completions"},
-		{"free responses model", "muse-spark-1.3-contributor-free", "/responses", "/inference/v1/responses"},
-		{"paid chat model keeps zen", "deepseek-v4-pro", "/chat/completions", "/zen/v1/chat/completions"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			probe := newZenProbe(t, zenChatReply)
+		{"big-pickle", "/zen/v1/chat/completions", zenChatReply},
+		{"deepseek-v4-flash-free", "/zen/v1/chat/completions", zenChatReply},
+		{"muse-spark-1.3-contributor-free", "/zen/v1/responses", zenResponsesReply},
+	}
+	for _, tt := range tests {
+		t.Run(tt.model, func(t *testing.T) {
+			var path, ua, client string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				path = r.URL.Path
+				ua = r.Header.Get("User-Agent")
+				client = r.Header.Get("x-opencode-client")
+				tt.reply(w)
+			}))
+			defer srv.Close()
 			rec := httptest.NewRecorder()
-			body := fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"hi"}],"stream":true}`, tc.model)
 			req := &Request{
-				Ctx:      context.Background(),
-				Client:   probe.server.Client(),
-				Config:   zenConfig(probe),
-				APIKey:   "sk-zen",
-				Body:     []byte(body),
-				IsStream: true,
+				Ctx:    context.Background(),
+				Client: srv.Client(),
+				Config: &providers.ProviderConfig{
+					BaseURL:    srv.URL + "/zen/v1/chat/completions",
+					AuthHeader: "Authorization",
+					AuthScheme: "bearer",
+					StaticHeaders: map[string]string{
+						"x-opencode-client": "desktop",
+						"User-Agent":        "opencode/1.18.31",
+					},
+				},
+				APIKey:        "sk-zen",
+				Body:          []byte(`{"model":"` + tt.model + `","messages":[{"role":"user","content":"hi"}],"stream":true}`),
+				IsStream:      true,
+				TranslateResp: false,
 			}
 			if err := ForwardOpencodeZen(rec, req); err != nil {
 				t.Fatalf("ForwardOpencodeZen: %v", err)
 			}
-			if probe.path != tc.want {
-				t.Errorf("upstream path = %q, want %q", probe.path, tc.want)
+			if path != tt.want {
+				t.Errorf("model %q reached %q, want the keyed lane %q", tt.model, path, tt.want)
+			}
+			if ua != proxy.DefaultOpenCodeV1UA {
+				t.Errorf("model %q sent User-Agent %q, want the v1 identity %q", tt.model, ua, proxy.DefaultOpenCodeV1UA)
+			}
+			if client != "desktop" {
+				t.Errorf("model %q sent x-opencode-client %q, want desktop", tt.model, client)
 			}
 		})
 	}
 }
+

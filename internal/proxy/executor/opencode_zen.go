@@ -32,20 +32,15 @@ const (
 	zenResponsesPath = "/responses"
 )
 
-// zenBaseURL resolves the API prefix of the request's base URL: the registry
+// zenBaseURL resolves the /zen/v1 prefix of the request's base URL: the registry
 // default, a connection override, or a relay host with the path carried in
-// x-relay-path. Free-tier models moved off /zen/v1 when OpenCode v2 introduced
-// the inference gate (decolua/9router#4842), so the prefix follows the model:
-// a free model dials /inference/v1, a paid one keeps /zen/v1.
-func zenBaseURL(cfg *providers.ProviderConfig, cleanModel string) string {
+// x-relay-path.
+func zenBaseURL(cfg *providers.ProviderConfig) string {
 	if cfg == nil {
 		return ""
 	}
 	if _, isRelay := cfg.StaticHeaders["x-relay-target"]; isRelay {
 		return strings.TrimRight(cfg.BaseURL, "/")
-	}
-	if isOpencodeFreeModel(cleanModel) {
-		return opencodeInferenceBase(cfg.BaseURL)
 	}
 	base := strings.TrimRight(cfg.BaseURL, "/")
 	base = strings.TrimSuffix(base, "/chat/completions")
@@ -181,6 +176,10 @@ func zenHeaders(cfg *providers.ProviderConfig, session string, stream bool) map[
 	headers := proxy.BuildOpenCodeHeaders(nil, session, stream)
 	// Upstream sends the desktop client id; BuildOpenCodeHeaders defaults to cli.
 	headers["x-opencode-client"] = "desktop"
+	// The keyed zen lane is untouched by the v2 free-tier migration: upstream
+	// decolua/9router#4842 keeps opencode-zen on the v1 identity
+	// (opencode/1.18.31) while only the keyless free executor moves to v2.
+	headers["User-Agent"] = proxy.DefaultOpenCodeV1UA
 	for k, v := range cfg.StaticHeaders {
 		switch strings.ToLower(k) {
 		case "x-relay-target", "x-relay-path", "x-opencode-project":
@@ -198,20 +197,14 @@ func zenHeaders(cfg *providers.ProviderConfig, session string, stream bool) map[
 // The relay header set is stamped from the connection's base URL
 // (BuildEdgeRelayHeaders), so the path it carries is whatever lane that base
 // URL named — /chat/completions for a default connection. Rewriting it keeps
-// the relay pointed at the endpoint the model actually lives on. Free-tier
-// models live behind the v2 inference gate, so their lane carries the
-// /inference/v1 prefix instead of /zen/v1.
-func zenRelayPath(cfg *providers.ProviderConfig, cleanModel, lanePath string) string {
-	prefix := "/zen/v1"
-	if isOpencodeFreeModel(cleanModel) {
-		prefix = "/inference/v1"
-	}
+// the relay pointed at the endpoint the model actually lives on.
+func zenRelayPath(cfg *providers.ProviderConfig, lanePath string) string {
 	if cfg != nil {
 		if target := cfg.StaticHeaders["x-relay-target"]; target != "" {
 			// An absolute origin is only a host; the lane decides the path. A
 			// relative one already carries the origin's path.
 			if strings.Contains(target, "://") {
-				return prefix + lanePath
+				return "/zen/v1" + lanePath
 			}
 			if i := strings.IndexByte(target, '/'); i >= 0 {
 				return target[i:]
@@ -219,7 +212,7 @@ func zenRelayPath(cfg *providers.ProviderConfig, cleanModel, lanePath string) st
 			return "/"
 		}
 	}
-	return prefix + lanePath
+	return "/zen/v1" + lanePath
 }
 
 func zenAuthHeaders(apiKey string) map[string]string {
@@ -240,24 +233,15 @@ func forwardZenChat(w http.ResponseWriter, req *Request, cleanModel, sourceForma
 		body = converted
 	}
 	body = InjectReasoningContent(body, "opencode-zen")
-	// Free-tier models answer behind the v2 inference gate, which fingerprints
-	// OpenCode's exact read/shell tools and rejects the old quartet stubs, so
-	// the free lane canonicalizes with the v2 pass while paid models keep the
-	// lenient quartet cloaking.
-	var zenToolNameMap map[string]string
-	if isOpencodeFreeModel(cleanModel) {
-		body, zenToolNameMap = translator.ConcealOpenCodeV2FingerprintTools(body, false, isOpenCodeAutoToolChoiceModel(cleanModel))
-	} else {
-		body, zenToolNameMap = translator.ConcealFingerprintTools(body)
-	}
-	req.Ctx = translator.WithToolNameMap(req.Ctx, zenToolNameMap)
-	w = NewToolNameRestoringWriter(w, zenToolNameMap)
+	body, toolNameMap := translator.ConcealFingerprintTools(body)
+	req.Ctx = translator.WithToolNameMap(req.Ctx, toolNameMap)
+	w = NewToolNameRestoringWriter(w, toolNameMap)
 
 	// Upstream rejects stream:false on the free-tier gate even for a keyed lane.
 	body = withJSONFields(body, map[string]any{"stream": true, "model": cleanModel})
 
 	cfg := *req.Config
-	cfg.BaseURL = zenBaseURL(&cfg, cleanModel) + "/chat/completions"
+	cfg.BaseURL = zenBaseURL(&cfg) + "/chat/completions"
 	cfg.StaticHeaders = zenHeaders(&cfg, req.SessionID, true)
 
 	resp, err := proxy.ForwardOpenAI(reqCtx(req), req.Client, &cfg, req.APIKey, body, true)
@@ -300,15 +284,9 @@ func forwardZenResponses(w http.ResponseWriter, req *Request, cleanModel, source
 	if err != nil {
 		return fmt.Errorf("normalize opencode-zen responses body: %w", err)
 	}
-	// Free-tier models answer behind the v2 inference gate, which fingerprints
-	// OpenCode's exact read/shell tools and rejects the old quartet stubs; paid
-	// models keep the lenient quartet cloaking.
-	var toolNameMap map[string]string
-	if isOpencodeFreeModel(cleanModel) {
-		body, toolNameMap = translator.ConcealOpenCodeV2FingerprintTools(body, true, isOpenCodeAutoToolChoiceModel(cleanModel))
-	} else {
-		body, toolNameMap = translator.ConcealFingerprintTools(body)
-	}
+	// The free-tier gate fingerprints the lowercase tool quartet; capitalised
+	// variants from Claude Code CLI are renamed here and restored on the way out.
+	body, toolNameMap := translator.ConcealFingerprintTools(body)
 	req.Ctx = translator.WithToolNameMap(req.Ctx, toolNameMap)
 	w = NewToolNameRestoringWriter(w, toolNameMap)
 	if sourceFormat == providers.FormatOpenAIResponses {
@@ -320,10 +298,10 @@ func forwardZenResponses(w http.ResponseWriter, req *Request, cleanModel, source
 		// The relay stamps the destination in its headers, so the lane
 		// decision belongs in x-relay-path, not in the URL we dial.
 		cfg.StaticHeaders = copyHeaders(cfg.StaticHeaders)
-		cfg.StaticHeaders["x-relay-path"] = zenRelayPath(req.Config, cleanModel, zenResponsesPath)
+		cfg.StaticHeaders["x-relay-path"] = zenRelayPath(req.Config, zenResponsesPath)
 		cfg.BaseURL = strings.TrimRight(cfg.BaseURL, "/") + zenResponsesPath
 	} else {
-		cfg.BaseURL = zenBaseURL(&cfg, cleanModel) + zenResponsesPath
+		cfg.BaseURL = zenBaseURL(&cfg) + zenResponsesPath
 	}
 	// zenHeaders reads from the copy so the relay headers just set survive.
 	cfg.StaticHeaders = zenHeaders(&cfg, req.SessionID, req.IsStream)
@@ -363,10 +341,6 @@ func forwardZenMessages(w http.ResponseWriter, req *Request, cleanModel string, 
 	default:
 		body = EnsureClaudeMessagesFor(body, "opencode-zen", cleanModel)
 	}
-	// The Claude-native messages lane is a paid-only surface today — no free
-	// model declares the Claude format — so it keeps the lenient quartet
-	// cloaking. If a free model ever declares Claude, the v2 pass must take
-	// over here the same way the chat and responses lanes do.
 	body, toolNameMap := translator.ConcealFingerprintTools(body)
 	req.Ctx = translator.WithToolNameMap(req.Ctx, toolNameMap)
 	w = NewToolNameRestoringWriter(w, toolNameMap)
@@ -384,9 +358,9 @@ func forwardZenMessages(w http.ResponseWriter, req *Request, cleanModel string, 
 
 	// An edge relay carries the destination in headers, so the lane belongs in
 	// x-relay-path rather than in the URL the gateway dials.
-	messagesURL := zenBaseURL(req.Config, cleanModel) + zenMessagesPath
+	messagesURL := zenBaseURL(req.Config) + zenMessagesPath
 	if isRelayConfig(req.Config) {
-		headers["x-relay-path"] = zenRelayPath(req.Config, cleanModel, zenMessagesPath)
+		headers["x-relay-path"] = zenRelayPath(req.Config, zenMessagesPath)
 		messagesURL = strings.TrimRight(req.Config.BaseURL, "/") + zenMessagesPath
 	}
 

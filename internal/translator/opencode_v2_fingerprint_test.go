@@ -78,13 +78,14 @@ func TestConcealOpenCodeV2CanonicalizesHarnessShapes(t *testing.T) {
 			t.Fatal(err)
 		}
 		tools, _ := got["tools"].([]any)
-		// Only the caller's Read survives plus the two injected fingerprints.
+		// The caller's Read survives (foreign keys stripped) plus the two
+		// injected fingerprints, which keep the upstream strict:false.
 		if len(tools) != 3 {
 			t.Fatalf("got %d tools, want 3: %s", len(tools), out)
 		}
 		for _, tool := range tools {
 			m := tool.(map[string]any)
-			for _, foreign := range []string{"cache_control", "function", "strict"} {
+			for _, foreign := range []string{"cache_control", "function"} {
 				if _, has := m[foreign]; has {
 					t.Errorf("tool %v still carries foreign key %q", m["name"], foreign)
 				}
@@ -117,15 +118,17 @@ func TestConcealOpenCodeV2CanonicalizesHarnessShapes(t *testing.T) {
 		}
 	})
 
-	t.Run("tool_choice none and auto-object collapse to auto on both lanes", func(t *testing.T) {
+	t.Run("tool_choice passes through untouched, like upstream", func(t *testing.T) {
 		for _, tc := range []struct {
 			name, body string
 			flat       bool
+			want       any
 		}{
-			{"chat none string", `{"messages":[],"tool_choice":"none"}`, false},
-			{"chat none object", `{"messages":[],"tool_choice":{"type":"none"}}`, false},
-			{"responses none string", `{"input":[],"tool_choice":"none"}`, true},
-			{"responses auto object", `{"input":[],"tool_choice":{"type":"auto","disable_parallel_tool_use":true}}`, true},
+			{"chat none string", `{"messages":[],"tool_choice":"none"}`, false, "none"},
+			{"chat none object", `{"messages":[],"tool_choice":{"type":"none"}}`, false, map[string]any{"type": "none"}},
+			{"responses none string", `{"input":[],"tool_choice":"none"}`, true, "none"},
+			{"responses auto object", `{"input":[],"tool_choice":{"type":"auto","disable_parallel_tool_use":true}}`, true, map[string]any{"type": "auto"}},
+			{"chat forced function", `{"messages":[],"tool_choice":{"type":"function","function":{"name":"Task"}}}`, false, "preserved"},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				out, _ := ConcealOpenCodeV2FingerprintTools([]byte(tc.body), tc.flat, false)
@@ -133,31 +136,46 @@ func TestConcealOpenCodeV2CanonicalizesHarnessShapes(t *testing.T) {
 				if err := json.Unmarshal(out, &got); err != nil {
 					t.Fatal(err)
 				}
-				if got["tool_choice"] != "auto" {
-					t.Errorf("tool_choice=%v, want auto (gate rejects none and object forms): %s", got["tool_choice"], out)
+				switch want := tc.want.(type) {
+				case string:
+					if want == "preserved" {
+						if _, ok := got["tool_choice"].(map[string]any); !ok {
+							t.Errorf("tool_choice=%v, want the forced choice preserved: %s", got["tool_choice"], out)
+						}
+						return
+					}
+					if got["tool_choice"] != want {
+						t.Errorf("tool_choice=%v, want %q (upstream never rewrites it): %s", got["tool_choice"], want, out)
+					}
+				default:
+					choice, ok := got["tool_choice"].(map[string]any)
+					if !ok || choice["type"] != want.(map[string]any)["type"] {
+						t.Errorf("tool_choice=%v, want it preserved: %s", got["tool_choice"], out)
+					}
 				}
 			})
 		}
 	})
 
-	t.Run("auto-only models get any forced choice rewritten to auto", func(t *testing.T) {
-		for _, tc := range []struct {
-			name, body string
-			flat       bool
-		}{
-			{"chat forced function", `{"messages":[],"tool_choice":{"type":"function","function":{"name":"Task"}}}`, false},
-			{"responses forced tool", `{"input":[],"tool_choice":{"type":"tool","name":"Task"}}`, true},
-		} {
-			t.Run(tc.name, func(t *testing.T) {
-				out, _ := ConcealOpenCodeV2FingerprintTools([]byte(tc.body), tc.flat, true)
-				var got map[string]any
-				if err := json.Unmarshal(out, &got); err != nil {
-					t.Fatal(err)
-				}
-				if got["tool_choice"] != "auto" {
-					t.Errorf("tool_choice=%v, want auto for an auto-only model: %s", got["tool_choice"], out)
-				}
-			})
+	t.Run("auto-only models get a responses forced choice rewritten to auto", func(t *testing.T) {
+		// Upstream applies the forceAutoToolChoiceModels quirk on the
+		// Responses lane only; a chat-lane choice is never rewritten.
+		out, _ := ConcealOpenCodeV2FingerprintTools([]byte(`{"input":[],"tool_choice":{"type":"tool","name":"Task"}}`), true, true)
+		var got map[string]any
+		if err := json.Unmarshal(out, &got); err != nil {
+			t.Fatal(err)
+		}
+		if got["tool_choice"] != "auto" {
+			t.Errorf("tool_choice=%v, want auto for an auto-only model: %s", got["tool_choice"], out)
+		}
+
+		chatOut, _ := ConcealOpenCodeV2FingerprintTools([]byte(`{"messages":[],"tool_choice":{"type":"function","function":{"name":"Task"}}}`), false, true)
+		var chatGot map[string]any
+		if err := json.Unmarshal(chatOut, &chatGot); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := chatGot["tool_choice"].(map[string]any); !ok {
+			t.Errorf("tool_choice=%v, want the chat-lane choice preserved: %s", chatGot["tool_choice"], chatOut)
 		}
 	})
 
@@ -241,4 +259,96 @@ func TestConcealOpenCodeV2CanonicalizesHarnessShapes(t *testing.T) {
 			}
 		}
 	})
+}
+
+// The v2 gate compares the appended definitions byte for byte: descriptions,
+// parameter schemas, and strict:false must match the OpenCode v2 CLI exactly
+// (open-sse/utils/opencodeFingerprint.js FINGERPRINT_TOOL_DEFINITIONS).
+func TestConcealOpenCodeV2MatchesUpstreamGateContract(t *testing.T) {
+	out, _ := ConcealOpenCodeV2FingerprintTools([]byte(`{"input":"hi"}`), true, false)
+	var got map[string]any
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatal(err)
+	}
+	tools, _ := got["tools"].([]any)
+	if len(tools) != 2 {
+		t.Fatalf("got %d tools, want read and shell: %s", len(tools), out)
+	}
+	byName := map[string]map[string]any{}
+	for _, tool := range tools {
+		m := tool.(map[string]any)
+		byName[m["name"].(string)] = m
+	}
+	read, shell := byName["read"], byName["shell"]
+	if read == nil || shell == nil {
+		t.Fatalf("want read and shell, got %s", out)
+	}
+	if !strings.HasPrefix(read["description"].(string), "Read the contents of a file or directory.") {
+		t.Errorf("read description diverges from upstream: %q", read["description"])
+	}
+	if !strings.HasPrefix(shell["description"].(string), "Execute a shell command and return its output.") {
+		t.Errorf("shell description diverges from upstream: %q", shell["description"])
+	}
+	shellParams, _ := shell["parameters"].(map[string]any)
+	props, _ := shellParams["properties"].(map[string]any)
+	background, _ := props["background"].(map[string]any)
+	if desc, _ := background["description"].(string); !strings.Contains(desc, "useful for dev servers and long-running builds") || !strings.Contains(desc, "when it completes. DO NOT poll") {
+		t.Errorf("shell.background diverges from the verbatim upstream text: %q", desc)
+	}
+	if read["strict"] != false || shell["strict"] != false {
+		t.Errorf("flat fingerprint tools must carry strict:false like upstream: %s", out)
+	}
+	readParams, _ := read["parameters"].(map[string]any)
+	readProps, _ := readParams["properties"].(map[string]any)
+	if _, ok := readProps["path"]; !ok {
+		t.Errorf("read parameters must require path: %s", out)
+	}
+	instructions, _ := got["instructions"].(string)
+	if !strings.Contains(instructions, "Do not call the `read` or `shell` tools; they are placeholders that do nothing.") {
+		t.Errorf("placeholder note diverges from upstream wording: %q", instructions)
+	}
+}
+
+// A lone appended tool gets the singular note; a Claude-shaped body (top-level
+// system key) gets no note at all — both verbatim upstream behavior.
+func TestConcealOpenCodeV2PlaceholderNoteShapes(t *testing.T) {
+	shellOnly, err := openCodeV2Tool("shell", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shellJSON, err := json.Marshal(shellOnly)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := []byte(`{"messages":[{"role":"user","content":"hi"}],"tools":[` + string(shellJSON) + `]}`)
+	out, _ := ConcealOpenCodeV2FingerprintTools(body, false, false)
+	var got map[string]any
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatal(err)
+	}
+	messages, _ := got["messages"].([]any)
+	if len(messages) == 0 {
+		t.Fatalf("want a system note prepended: %s", out)
+	}
+	first, _ := messages[0].(map[string]any)
+	content, _ := first["content"].(string)
+	// The caller declared shell exactly, so only read is appended — and the
+	// note uses the singular upstream wording for it.
+	if !strings.Contains(content, "Do not call the `read` tool; it is a placeholder that does nothing.") {
+		t.Errorf("want the singular upstream note, got %q", content)
+	}
+
+	claudeBody := []byte(`{"system":"you are helpful","messages":[{"role":"user","content":"hi"}]}`)
+	claudeOut, _ := ConcealOpenCodeV2FingerprintTools(claudeBody, false, false)
+	var claudeGot map[string]any
+	if err := json.Unmarshal(claudeOut, &claudeGot); err != nil {
+		t.Fatal(err)
+	}
+	claudeMessages, _ := claudeGot["messages"].([]any)
+	for _, msg := range claudeMessages {
+		m := msg.(map[string]any)
+		if m["role"] == "system" {
+			t.Errorf("Claude-shaped bodies must not gain a system note: %s", claudeOut)
+		}
+	}
 }

@@ -42,8 +42,8 @@ func TestForwardOpencode(t *testing.T) {
 		if r.Header.Get("x-opencode-client") != "cli" {
 			t.Errorf("expected cli client header, got %s", r.Header.Get("x-opencode-client"))
 		}
-		if len(r.Header.Get("x-opencode-project")) != 40 {
-			t.Errorf("expected 40-char hex x-opencode-project, got %s", r.Header.Get("x-opencode-project"))
+		if r.Header.Get("x-opencode-project") != "global" {
+			t.Errorf("expected x-opencode-project global like upstream, got %s", r.Header.Get("x-opencode-project"))
 		}
 		if !strings.HasPrefix(r.Header.Get("x-opencode-session"), "ses_") {
 			t.Errorf("expected ses_ prefix on x-opencode-session, got %s", r.Header.Get("x-opencode-session"))
@@ -235,6 +235,12 @@ func TestForwardOpencodeGo_OpenAIRouting(t *testing.T) {
 		if r.Header.Get("Authorization") != "Bearer secret-go-key" {
 			t.Errorf("expected Authorization Bearer secret-go-key header, got %s", r.Header.Get("Authorization"))
 		}
+		// The paid go lane keeps the v1 identity: only the keyless free
+		// executor moved to v2 (upstream decolua/9router#4842 leaves keyed
+		// executors untouched).
+		if r.Header.Get("User-Agent") != proxy.DefaultOpenCodeV1UA {
+			t.Errorf("expected paid-lane User-Agent %s, got %s", proxy.DefaultOpenCodeV1UA, r.Header.Get("User-Agent"))
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"id":"msg_openai","choices":[{"message":{"content":"hello"}}]}`))
@@ -353,6 +359,89 @@ func TestOpenCodeInferenceBase(t *testing.T) {
 				t.Errorf("opencodeInferenceBase(%q) = %q, want %q", tt.input, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestIsOpencodeResponsesModel(t *testing.T) {
+	// Ports the upstream free-executor lane rule (isResponsesModel = curated
+	// set plus isMuseSparkModel /^muse[-_]?spark(?:$|[-_:.\s])/i).
+	tests := []struct {
+		model string
+		want  bool
+	}{
+		{"muse-spark-1.2-contributor-free", true},
+		{"muse-spark-1.3-contributor-free", true},
+		{"muse-spark-1.3-contributor-free(xhigh)", true},
+		{"muse-spark-1.4-contributor-free", true},
+		{"muse-spark-2.0-contributor-free", true},
+		{"jev-1.13-free", false},
+		{"space-bunny-free", false},
+		{"big-pickle", false},
+		{"grok-4.6", false},
+		{"gpt-5.6-luna", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.model, func(t *testing.T) {
+			if got := isOpencodeResponsesModel(tt.model); got != tt.want {
+				t.Errorf("isOpencodeResponsesModel(%q) = %v, want %v", tt.model, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsOpencodeGoResponsesModel(t *testing.T) {
+	// The paid go lane keeps its pre-v2 predicate: narrowing it to the free
+	// ids would silently move paid traffic to the chat lane.
+	tests := []struct {
+		model string
+		want  bool
+	}{
+		{"muse-spark-1.2-contributor", true},
+		{"muse-spark-1.3-contributor", true},
+		{"muse-spark-1.2-contributor-free", true},
+		{"grok-4.6", true},
+		{"gpt-5.6-luna", true},
+		{"space-bunny-free", false},
+		{"glm-5.2", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.model, func(t *testing.T) {
+			if got := isOpencodeGoResponsesModel(tt.model); got != tt.want {
+				t.Errorf("isOpencodeGoResponsesModel(%q) = %v, want %v", tt.model, got, tt.want)
+			}
+		})
+	}
+}
+
+// A paid go Muse Spark model must stay on the go Responses lane with the v1
+// identity — the free-executor narrowing must never leak into this lane.
+func TestForwardOpencodeGo_MuseSparkResponsesRouting(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/zen/go/v1/responses") {
+			t.Errorf("expected paid go responses lane, got %s", r.URL.Path)
+		}
+		if r.Header.Get("User-Agent") != proxy.DefaultOpenCodeV1UA {
+			t.Errorf("expected paid-lane User-Agent %s, got %s", proxy.DefaultOpenCodeV1UA, r.Header.Get("User-Agent"))
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(responsesEventStream("go spark ok")))
+	}))
+	defer srv.Close()
+
+	cfg := &providers.ProviderConfig{BaseURL: srv.URL + "/zen/go/v1/chat/completions"}
+	rec := httptest.NewRecorder()
+	req := &Request{
+		Client: srv.Client(), Config: cfg, APIKey: "secret-go-key",
+		Body:     []byte(`{"model":"muse-spark-1.2-contributor","messages":[{"role":"user","content":"hi"}]}`),
+		IsStream: false, TranslateResp: false,
+	}
+	if err := ForwardOpencodeGo(rec, req); err != nil {
+		t.Fatalf("ForwardOpencodeGo failed: %v", err)
+	}
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", rec.Code)
 	}
 }
 

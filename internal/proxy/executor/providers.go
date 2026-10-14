@@ -737,27 +737,6 @@ func isOpenCodeAutoToolChoiceModel(cleanModel string) bool {
 	return cleanModel == "muse-spark-1.3-contributor-free"
 }
 
-// isOpencodeFreeModel reports whether a bare model id belongs to the OpenCode
-// free tier, whose requests moved off /zen/v1 to the v2 inference gate
-// (decolua/9router#4842). The source of truth is the curated registry —
-// the free zen ids all live in providers.ProviderModelFormats — so the
-// classification stays catalog-driven rather than suffix matching.
-func isOpencodeFreeModel(cleanModel string) bool {
-	base := cleanModel
-	if parenIdx := strings.IndexByte(base, '('); parenIdx != -1 {
-		base = base[:parenIdx]
-	}
-	for _, provider := range []string{"opencode", "opencode-zen"} {
-		if _, declared := providers.GetModelFormats(provider, base); !declared {
-			continue
-		}
-		if providers.IsOpencodeFreeTierModel(provider, base) {
-			return true
-		}
-	}
-	return false
-}
-
 var opencodeGoMessagesModels = map[string]bool{
 	"minimax-m3":    true,
 	"minimax-m2.7":  true,
@@ -1196,12 +1175,42 @@ func normalizeClaudeBlocks(c any) []any {
 	}
 }
 
+// isOpencodeResponsesModel ports the upstream free-executor lane rule
+// (open-sse/executors/opencode.js isResponsesModel): the two curated free ids
+// plus any Muse Spark model (upstream isMuseSparkModel:
+// /^muse[-_]?spark(?:$|[-_:.\s])/i), so future free Spark ids keep the
+// Responses lane without a code change. Paid lanes must not share this
+// predicate — opencode-go has its own (isOpencodeGoResponsesModel).
 func isOpencodeResponsesModel(model string) bool {
 	base := model
 	if parenIdx := strings.IndexByte(base, '('); parenIdx != -1 {
 		base = base[:parenIdx]
 	}
-	return base == "muse-spark-1.2-contributor-free" || base == "muse-spark-1.3-contributor-free"
+	if base == "muse-spark-1.2-contributor-free" || base == "muse-spark-1.3-contributor-free" {
+		return true
+	}
+	lower := strings.ToLower(base)
+	for _, prefix := range []string{"muse-spark", "musespark", "muse_spark"} {
+		rest, ok := strings.CutPrefix(lower, prefix)
+		if !ok {
+			continue
+		}
+		if rest == "" || strings.ContainsRune("-_:.\u00a0 \t", rune(rest[0])) {
+			return true
+		}
+	}
+	return false
+}
+
+// isOpencodeGoResponsesModel preserves the paid opencode-go lane rule exactly
+// as it was before the v2 free-tier port: go models route on the broader
+// predicate and must never follow the free executor's narrowing.
+func isOpencodeGoResponsesModel(model string) bool {
+	base := model
+	if parenIdx := strings.IndexByte(base, '('); parenIdx != -1 {
+		base = base[:parenIdx]
+	}
+	return strings.Contains(base, "muse-spark") || base == "grok-4.6" || base == "gpt-5.6-luna"
 }
 
 func deriveOpencodeSession(rawSession, clientTool, connID string) string {
@@ -1283,7 +1292,7 @@ func ForwardOpencodeGo(w http.ResponseWriter, req *Request) error {
 		cleanModel = cleanModel[:parenIdx]
 	}
 
-	if isOpencodeResponsesModel(cleanModel) {
+	if isOpencodeGoResponsesModel(cleanModel) {
 		// Route through Responses API format: https://opencode.ai/zen/go/v1/responses (#3819, #3820, v0.5.75)
 		transformedBody, _, err := buildResponsesBody(req.Body)
 		if err != nil {
@@ -1315,8 +1324,8 @@ func ForwardOpencodeGo(w http.ResponseWriter, req *Request) error {
 		for k, v := range cfg.StaticHeaders {
 			headers[k] = v
 		}
-		if headers["User-Agent"] == "" || !proxy.HasValidOpenCodeVersion(headers["User-Agent"]) {
-			headers["User-Agent"] = proxy.DefaultOpenCodeUA
+		if headers["User-Agent"] == "" || !proxy.HasValidOpenCodeV1Version(headers["User-Agent"]) {
+			headers["User-Agent"] = proxy.DefaultOpenCodeV1UA
 		}
 		if headers["x-opencode-client"] == "" {
 			headers["x-opencode-client"] = "desktop"
@@ -1409,8 +1418,9 @@ func ForwardOpencodeGo(w http.ResponseWriter, req *Request) error {
 	for k, v := range cfg.StaticHeaders {
 		headers[k] = v
 	}
-	if headers["User-Agent"] == "" || !proxy.HasValidOpenCodeVersion(headers["User-Agent"]) {
-		headers["User-Agent"] = proxy.DefaultOpenCodeUA
+	// The paid go lane keeps the v1 identity (see DefaultOpenCodeV1UA).
+	if headers["User-Agent"] == "" || !proxy.HasValidOpenCodeV1Version(headers["User-Agent"]) {
+		headers["User-Agent"] = proxy.DefaultOpenCodeV1UA
 	}
 	if headers["x-opencode-client"] == "" {
 		headers["x-opencode-client"] = "desktop"

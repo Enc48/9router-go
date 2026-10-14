@@ -380,7 +380,7 @@ var KnownProviders = map[string]ProviderConfig{
 		SystemoneURL: "https://opencode.ai/zen/v1/systemone",
 		StaticHeaders: map[string]string{
 			"x-opencode-client": "desktop",
-			"User-Agent":        "opencode/latest/2.0.29/cli",
+			"User-Agent":        "opencode/1.18.31",
 		},
 	},
 	"gemini": {

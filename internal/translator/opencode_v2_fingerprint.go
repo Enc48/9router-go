@@ -18,16 +18,17 @@ const openCodeShellDescription = "Execute a shell command and return its output.
 //   - caller tools named exactly read/shell with a different definition
 //     travel under a *_client alias (history and tool_choice retargeted);
 //   - the exact OpenCode read/shell definitions are appended when absent;
-//   - on the Responses lane every tool is rebuilt into the canonical flat
-//     shape, dropping foreign keys (cache_control, strict, …), defaulting
-//     missing schemas and dropping nameless entries, like the upstream
-//     executor's normalizeResponsesTools;
+//   - on the Responses lane every caller tool is rebuilt into the canonical
+//     flat shape, dropping foreign keys (cache_control, strict, …),
+//     defaulting missing schemas and dropping nameless entries, like the
+//     upstream executor's normalizeResponsesTools; the exact definitions are
+//     appended afterwards so they keep strict:false;
 //   - on the chat lane caller tools keep their shape but gain a default
 //     object schema when missing, so no stub schema reaches the gate;
-//   - tool_choice "none" and "auto"/"any" objects collapse to "auto";
-//     a forced choice survives unless forceAutoChoice says the model is
-//     auto-only (the upstream forceAutoToolChoiceModels quirk), or the
-//     Responses lane drops a forced choice naming no declared tool.
+//   - tool_choice passes through untouched, except on the Responses lane,
+//     where an explicit choice becomes "auto" on auto-only models (the
+//     upstream forceAutoToolChoiceModels quirk) and a forced function choice
+//     naming no declared tool is dropped.
 //
 // flat is true for Responses API bodies and false for Chat Completions.
 func ConcealOpenCodeV2FingerprintTools(body []byte, flat bool, forceAutoChoice bool) ([]byte, map[string]string) {
@@ -66,18 +67,6 @@ func ConcealOpenCodeV2FingerprintTools(body []byte, flat bool, forceAutoChoice b
 		setToolName(tool, alias)
 		kept = append(kept, tool)
 	}
-	appended := make([]string, 0, 2)
-	for _, name := range []string{"read", "shell"} {
-		if seen[name] {
-			continue
-		}
-		tool, err := openCodeV2Tool(name, flat)
-		if err != nil {
-			return body, map[string]string{}
-		}
-		kept = append(kept, tool)
-		appended = append(appended, name)
-	}
 	request["tools"] = kept
 
 	var validNames map[string]bool
@@ -94,12 +83,44 @@ func ConcealOpenCodeV2FingerprintTools(body []byte, flat bool, forceAutoChoice b
 	if flat {
 		dropNamelessOpenCodeV2FunctionCalls(request)
 	}
+	// Append OpenCode's exact definitions after canonicalization, mirroring
+	// the upstream executor (normalizeResponsesTools runs before
+	// applyFingerprintTools): the appended tools keep strict:false on the
+	// Responses lane, and the forced-choice check below only sees
+	// caller-declared names.
+	var appended []string
+	current, _ := request["tools"].([]any)
+	for _, name := range []string{"read", "shell"} {
+		if seen[name] {
+			continue
+		}
+		tool, err := openCodeV2Tool(name, flat)
+		if err != nil {
+			return body, map[string]string{}
+		}
+		current = append(current, tool)
+		appended = append(appended, name)
+	}
+	request["tools"] = current
 	droppedChoice = normalizeOpenCodeV2ToolChoice(request, flat, forceAutoChoice, validNames)
 	if flat && request["tool_choice"] == nil && !droppedChoice {
 		request["tool_choice"] = "auto"
 	}
 	if len(appended) > 0 {
-		note := "Do not call the " + strings.Join(appended, " or ") + " tools; they are placeholders that do nothing. Use the other tools you have been given instead."
+		// Verbatim from the upstream executor (noteUnavailableTools): the
+		// gate does not inspect prompt text, but the model does — backticks,
+		// singular/plural, and all.
+		quoted := make([]string, 0, len(appended))
+		for _, name := range appended {
+			quoted = append(quoted, "`"+name+"`")
+		}
+		list := strings.Join(quoted, " or ")
+		var note string
+		if len(appended) > 1 {
+			note = "Do not call the " + list + " tools; they are placeholders that do nothing. Use the other tools you have been given instead."
+		} else {
+			note = "Do not call the " + list + " tool; it is a placeholder that does nothing. Use the other tools you have been given instead."
+		}
 		if flat {
 			if s, ok := request["instructions"].(string); ok && strings.TrimSpace(s) != "" {
 				request["instructions"] = s + "\n\n" + note
@@ -245,39 +266,40 @@ func dropNamelessOpenCodeV2FunctionCalls(request map[string]any) {
 	request["input"] = out
 }
 
-// normalizeOpenCodeV2ToolChoice collapses the tool_choice forms the gate
-// rejects. Accepted upstream: absent or the string "auto". Everything else
-// here degrades toward "auto" rather than risking a 403: the "none" string,
-// "auto"/"any"-typed objects, and any forced choice on an auto-only model.
-// A forced choice naming a tool that is not declared is dropped on the
-// Responses lane (upstream normalizeResponsesTools) and kept on the chat lane,
-// matching the upstream executor. It reports whether the choice was dropped,
-// so the caller does not refill the slot with a default.
+// normalizeOpenCodeV2ToolChoice ports the upstream tool_choice handling
+// (open-sse/executors/opencode.js): the Responses lane rewrites any explicit
+// choice to "auto" on auto-only models (the forceAutoToolChoiceModels quirk)
+// and drops a forced function choice naming no declared tool. Anything else —
+// including "none" and the chat lane — passes through untouched, exactly like
+// upstream. It reports whether the choice was dropped, so the caller does not
+// refill the slot with a default.
 func normalizeOpenCodeV2ToolChoice(request map[string]any, flat, forceAutoChoice bool, validNames map[string]bool) bool {
-	switch choice := request["tool_choice"].(type) {
-	case string:
-		if choice == "none" {
+	if !flat {
+		return false
+	}
+	choice, present := request["tool_choice"]
+	if !present || choice == nil {
+		return false
+	}
+	if s, ok := choice.(string); ok {
+		if s != "auto" && forceAutoChoice {
 			request["tool_choice"] = "auto"
 		}
-	case map[string]any:
-		switch choice["type"] {
-		case "auto", "any", "none":
-			request["tool_choice"] = "auto"
-		case "function", "tool":
-			if forceAutoChoice {
-				request["tool_choice"] = "auto"
-				return false
-			}
-			name, _ := choice["name"].(string)
-			if fn, ok := choice["function"].(map[string]any); ok {
-				if n, _ := fn["name"].(string); name == "" {
-					name = n
-				}
-			}
-			if flat && !validNames[strings.TrimSpace(name)] {
-				delete(request, "tool_choice")
-				return true
-			}
+		return false
+	}
+	m, ok := choice.(map[string]any)
+	if !ok {
+		return false
+	}
+	if forceAutoChoice {
+		request["tool_choice"] = "auto"
+		return false
+	}
+	if m["type"] == "function" {
+		name, _ := m["name"].(string)
+		if !validNames[strings.TrimSpace(name)] {
+			delete(request, "tool_choice")
+			return true
 		}
 	}
 	return false
@@ -287,7 +309,7 @@ func openCodeV2Parameters(name string) string {
 	if name == "read" {
 		return "{\"additionalProperties\":false,\"properties\":{\"limit\":{\"description\":\"The maximum number of lines or directory entries to read (defaults to and capped at 2000)\",\"minimum\":0,\"type\":\"integer\"},\"offset\":{\"description\":\"The line or directory entry to start reading from (1-based)\",\"minimum\":0,\"type\":\"integer\"},\"path\":{\"description\":\"File or directory to read\",\"type\":\"string\"}},\"required\":[\"path\"],\"type\":\"object\"}"
 	}
-	return "{\"additionalProperties\":false,\"properties\":{\"background\":{\"description\":\"Run the command in the background and return immediately (useful for long-running commands). You do not need to use '&' at the end of the command when using this parameter. You will be notified when they complete. DO NOT poll for completion.\",\"type\":\"boolean\"},\"command\":{\"description\":\"Shell command string to execute\",\"type\":\"string\"},\"timeout\":{\"description\":\"Timeout in milliseconds. Set to 0 to disable the timeout. Defaults to 120000 for foreground commands. Background commands have no timeout by default.\",\"minimum\":0,\"type\":\"integer\"},\"workdir\":{\"description\":\"Working directory to execute the command in. Defaults to the current working directory. When possible, avoid changing directories in the command and set the working directory here instead.\",\"type\":\"string\"}},\"required\":[\"command\"],\"type\":\"object\"}"
+	return "{\"additionalProperties\":false,\"properties\":{\"background\":{\"description\":\"Run the command in the background and return immediately (useful for dev servers and long-running builds). You do not need to use '&' at the end of the command when using this parameter. You will be notified when it completes. DO NOT poll for completion.\",\"type\":\"boolean\"},\"command\":{\"description\":\"Shell command string to execute\",\"type\":\"string\"},\"timeout\":{\"description\":\"Timeout in milliseconds. Set to 0 to disable the timeout. Defaults to 120000 for foreground commands. Background commands have no timeout by default.\",\"minimum\":0,\"type\":\"integer\"},\"workdir\":{\"description\":\"Working directory to execute the command in. Defaults to the current working directory. When possible, avoid changing directories in the command and set the working directory here instead.\",\"type\":\"string\"}},\"required\":[\"command\"],\"type\":\"object\"}"
 }
 
 func openCodeV2Tool(name string, flat bool) (map[string]any, error) {
@@ -301,7 +323,8 @@ func openCodeV2Tool(name string, flat bool) (map[string]any, error) {
 		description = openCodeShellDescription
 	}
 	if flat {
-		return map[string]any{"type": "function", "name": name, "description": description, "parameters": schema}, nil
+		// Upstream appends flat tools with strict:false and asserts it.
+		return map[string]any{"type": "function", "name": name, "description": description, "parameters": schema, "strict": false}, nil
 	}
 	return map[string]any{"type": "function", "function": map[string]any{"name": name, "description": description, "parameters": schema}}, nil
 }
@@ -361,7 +384,15 @@ func aliasOpenCodeV2Choice(request map[string]any, sentToOriginal map[string]str
 }
 
 func addOpenCodeChatNote(request map[string]any, note string) {
-	messages, _ := request["messages"].([]any)
+	// Claude-shaped bodies carry `system` instead of a leading system
+	// message; upstream returns early for them without a note.
+	if _, hasSystem := request["system"]; hasSystem {
+		return
+	}
+	messages, ok := request["messages"].([]any)
+	if !ok {
+		return
+	}
 	if len(messages) > 0 {
 		if first, ok := messages[0].(map[string]any); ok && first["role"] == "system" {
 			if content, ok := first["content"].(string); ok {

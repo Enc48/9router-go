@@ -23,8 +23,13 @@ func TestBuildOpenCodeHeaders(t *testing.T) {
 	if len(headers["x-opencode-session"]) != 30 {
 		t.Errorf("expected session length 30, got %d (%s)", len(headers["x-opencode-session"]), headers["x-opencode-session"])
 	}
-	if !proxy.OpenCodeRequestRegex.MatchString(headers["x-opencode-request"]) {
-		t.Errorf("expected canonical x-opencode-request matching regex, got %s", headers["x-opencode-request"])
+	if headers["x-opencode-request"] != "" {
+		t.Errorf("v2 fingerprint must omit x-opencode-request, got %q", headers["x-opencode-request"])
+	}
+	for _, key := range []string{"x-opencode-session-id", "x-session-affinity", "x-session-id"} {
+		if headers[key] != headers["x-opencode-session"] {
+			t.Errorf("%s = %q, want session %q", key, headers[key], headers["x-opencode-session"])
+		}
 	}
 	if headers["Accept"] != "text/event-stream" {
 		t.Errorf("expected Accept text/event-stream, got %s", headers["Accept"])
@@ -70,9 +75,12 @@ func TestHasValidOpenCodeVersion(t *testing.T) {
 	}{
 		{"opencode", false},
 		{"opencode/1.16.5", false},
-		{"opencode/1.17.0", true},
-		{"opencode/1.18.31", true},
-		{"opencode/2.0.0", true},
+		{"opencode/1.17.0", false},
+		{"opencode/1.18.31", false},
+		{"opencode/latest/2.0.0/cli", true},
+		{"opencode/latest/2.0.26/cli", true},
+		{"opencode/stable/2.0.26/desktop", true},
+		{"prefix opencode/latest/2.0.26/cli", false},
 		{"Claude-Code/1.0", false},
 		{"curl/8.7.1", false},
 	}

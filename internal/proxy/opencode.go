@@ -13,8 +13,8 @@ import (
 
 const (
 	// DefaultOpenCodeUA is the official OpenCode fingerprint User-Agent.
-	// Upstream requires version >= 1.17.0 (PR #4105, PR #4111).
-	DefaultOpenCodeUA = "opencode/1.18.31 ai-sdk/provider-utils/4.0.46 runtime/bun/1.3.14"
+	// OpenCode v2 fingerprint required by the free-tier /inference/v1 API.
+	DefaultOpenCodeUA = "opencode/latest/2.0.26/cli"
 
 	base62Chars = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 )
@@ -94,7 +94,19 @@ func TranslateOpenCodeSessionID(sessionID, clientTool string) string {
 	h := sha256.New()
 	h.Write([]byte("opencode\x00" + tool + "\x00" + trimmed))
 	digest := h.Sum(nil)
-	timeHex := hex.EncodeToString(digest[:6])
+	// Keep the deterministic time component but pin the low 12 counter bits
+	// to the small value accepted by the OpenCode v2 free-tier gate.
+	timeValue := uint64(0)
+	for _, b := range digest[:5] {
+		timeValue = (timeValue << 8) | uint64(b)
+	}
+	timeValue &= (uint64(1) << 36) - 1
+	current := timeValue*0x1000 + 1
+	var prefix [6]byte
+	for i := range 6 {
+		prefix[i] = byte((^current >> (40 - 8*uint64(i))) & 0xff)
+	}
+	timeHex := hex.EncodeToString(prefix[:])
 	var sb strings.Builder
 	sb.Grow(14)
 	for i := 6; i < 20; i++ {
@@ -103,23 +115,19 @@ func TranslateOpenCodeSessionID(sessionID, clientTool string) string {
 	return "ses_" + timeHex + sb.String()
 }
 
-var opencodeUARegex = regexp.MustCompile(`(?i)opencode/(\d+)\.(\d+)(?:\.(\d+))?`)
+var opencodeUARegex = regexp.MustCompile(`(?i)^opencode/([a-z0-9-]+)/(\d+)\.(\d+)\.(\d+)/([a-z0-9-]+)$`)
 
-// HasValidOpenCodeVersion checks if a User-Agent is opencode >= 1.17.0.
+// HasValidOpenCodeVersion checks whether a User-Agent uses the OpenCode v2 shape.
 func HasValidOpenCodeVersion(ua string) bool {
 	matches := opencodeUARegex.FindStringSubmatch(ua)
-	if len(matches) < 3 {
+	if len(matches) < 6 {
 		return false
 	}
-	major, err := strconv.Atoi(matches[1])
+	major, err := strconv.Atoi(matches[2])
 	if err != nil {
 		return false
 	}
-	minor, err := strconv.Atoi(matches[2])
-	if err != nil {
-		return false
-	}
-	return major > 1 || (major == 1 && minor >= 17)
+	return major >= 2
 }
 
 // BuildOpenCodeHeaders generates the official OpenCode fingerprint headers to prevent 403 FreeTierError.
@@ -132,14 +140,15 @@ func BuildOpenCodeHeaders(rawHeaders map[string]string, sessionID string, isStre
 	}
 
 	res := map[string]string{
-		"Content-Type":       "application/json",
-		"Authorization":      "Bearer public",
-		"x-api-key":          "public",
-		"User-Agent":         DefaultOpenCodeUA,
-		"x-opencode-client":  "cli",
-		"x-opencode-session": session,
-		"x-opencode-request": GenerateOpenCodeRequestID(),
-		"x-opencode-project": GenerateOpenCodeProjectID(),
+		"Content-Type":          "application/json",
+		"Authorization":         "Bearer public",
+		"User-Agent":            DefaultOpenCodeUA,
+		"x-opencode-client":     "cli",
+		"x-opencode-session":    session,
+		"x-opencode-session-id": session,
+		"x-session-affinity":    session,
+		"x-session-id":          session,
+		"x-opencode-project":    GenerateOpenCodeProjectID(),
 	}
 	if isStream {
 		res["Accept"] = "text/event-stream"
@@ -164,7 +173,7 @@ func BuildOpenCodeHeaders(rawHeaders map[string]string, sessionID string, isStre
 				res["x-opencode-session"] = TranslateOpenCodeSessionID(trimmed, "")
 			}
 		}
-		if lk == "x-opencode-client" || lk == "x-opencode-request" {
+		if lk == "x-opencode-client" {
 			res[k] = v
 		}
 		if lk == "x-opencode-project" {

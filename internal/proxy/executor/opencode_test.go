@@ -48,13 +48,36 @@ func TestForwardOpencode(t *testing.T) {
 		if !strings.HasPrefix(r.Header.Get("x-opencode-session"), "ses_") {
 			t.Errorf("expected ses_ prefix on x-opencode-session, got %s", r.Header.Get("x-opencode-session"))
 		}
-		if !strings.HasPrefix(r.Header.Get("x-opencode-request"), "msg_") {
-			t.Errorf("expected msg_ prefix on x-opencode-request, got %s", r.Header.Get("x-opencode-request"))
+		if r.Header.Get("x-opencode-request") != "" {
+			t.Errorf("v2 request must omit x-opencode-request, got %q", r.Header.Get("x-opencode-request"))
+		}
+		if r.Header.Get("x-opencode-session-id") != r.Header.Get("x-opencode-session") || r.Header.Get("x-session-affinity") != r.Header.Get("x-opencode-session") || r.Header.Get("x-session-id") != r.Header.Get("x-opencode-session") {
+			t.Errorf("session affinity headers do not match: %#v", r.Header)
 		}
 		if r.Header.Get("User-Agent") != proxy.DefaultOpenCodeUA {
 			t.Errorf("expected User-Agent %s, got %s", proxy.DefaultOpenCodeUA, r.Header.Get("User-Agent"))
 		}
 		body, _ := io.ReadAll(r.Body)
+		var parsed map[string]any
+		if err := json.Unmarshal(body, &parsed); err == nil {
+			if parsed["tool_choice"] == "none" {
+				t.Errorf("OpenCode v2 rejects tool_choice none: %s", body)
+			}
+			tools, _ := parsed["tools"].([]any)
+			for _, name := range []string{"read", "shell"} {
+				found := false
+				for _, tool := range tools {
+					tm, _ := tool.(map[string]any)
+					fn, _ := tm["function"].(map[string]any)
+					if fn["name"] == name {
+						found = true
+					}
+				}
+				if !found {
+					t.Errorf("missing v2 fingerprint tool %q: %s", name, body)
+				}
+			}
+		}
 		if !strings.Contains(string(body), `"reasoning_content":" "`) {
 			t.Errorf("expected reasoning_content injected in request body, got %s", string(body))
 		}
@@ -101,7 +124,7 @@ func TestForwardOpencode_MuseSpark_EdgeRelay(t *testing.T) {
 	defer srv.Close()
 
 	cfg := &providers.ProviderConfig{
-		BaseURL: srv.URL, // relay host
+		BaseURL: srv.URL, // local fake upstream; leave its path intact
 		StaticHeaders: map[string]string{
 			"x-relay-target": "https://opencode.ai",
 			"x-relay-path":   "/zen/v1/chat/completions",
@@ -125,8 +148,8 @@ func TestForwardOpencode_MuseSpark_EdgeRelay(t *testing.T) {
 	if gotTarget != "https://opencode.ai" {
 		t.Errorf("expected x-relay-target 'https://opencode.ai', got %q", gotTarget)
 	}
-	if gotPath != "/zen/v1/responses" {
-		t.Errorf("expected x-relay-path '/zen/v1/responses', got %q", gotPath)
+	if gotPath != "/inference/v1/responses" {
+		t.Errorf("expected x-relay-path '/inference/v1/responses', got %q", gotPath)
 	}
 }
 
@@ -166,8 +189,8 @@ func TestForwardOpencodeGo_OpenAIRouting(t *testing.T) {
 
 func TestForwardOpencode_MuseSparkResponsesRouting(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasSuffix(r.URL.Path, "/responses") {
-			t.Errorf("expected path ending in /responses, got %s", r.URL.Path)
+		if !strings.HasSuffix(r.URL.Path, "/zen/v1/responses") {
+			t.Errorf("expected custom upstream path to be retained, got %s", r.URL.Path)
 		}
 		body, _ := io.ReadAll(r.Body)
 		var parsed map[string]any
@@ -184,7 +207,7 @@ func TestForwardOpencode_MuseSparkResponsesRouting(t *testing.T) {
 	defer srv.Close()
 
 	cfg := &providers.ProviderConfig{
-		BaseURL: srv.URL + "/chat/completions",
+		BaseURL: srv.URL + "/zen/v1/chat/completions",
 	}
 
 	rec := httptest.NewRecorder()
@@ -209,7 +232,7 @@ func TestForwardOpencode_MuseSparkResponsesRouting(t *testing.T) {
 func TestForwardOpencode_MuseSpark13_ResponsesRouting(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasSuffix(r.URL.Path, "/responses") {
-			t.Errorf("expected /responses for muse-spark-1.3, got %s", r.URL.Path)
+			t.Errorf("expected responses endpoint, got %s", r.URL.Path)
 		}
 		body, _ := io.ReadAll(r.Body)
 		var parsed map[string]any
@@ -235,6 +258,22 @@ func TestForwardOpencode_MuseSpark13_ResponsesRouting(t *testing.T) {
 	}
 	if rec.Code != http.StatusOK {
 		t.Errorf("expected 200, got %d", rec.Code)
+	}
+}
+
+func TestOpenCodeInferenceBase(t *testing.T) {
+	tests := []struct{ input, want string }{
+		{"https://opencode.ai/zen/v1/chat/completions", "https://opencode.ai/inference/v1"},
+		{"https://opencode.ai/zen/v1", "https://opencode.ai/inference/v1"},
+		{"http://127.0.0.1:9000", "http://127.0.0.1:9000"},
+		{"https://relay.example/api", "https://relay.example/api"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			if got := opencodeInferenceBase(tt.input); got != tt.want {
+				t.Errorf("opencodeInferenceBase(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
 	}
 }
 

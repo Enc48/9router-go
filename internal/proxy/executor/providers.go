@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"runtime"
 	"strconv"
@@ -600,7 +601,7 @@ func ForwardOpencode(w http.ResponseWriter, req *Request) error {
 		// The free-tier gate fingerprints the lowercase tool quartet; capitalised
 		// variants from Claude Code CLI are renamed here and restored on the
 		// response (translator.ConcealFingerprintTools).
-		transformedBody, toolNameMap := translator.ConcealFingerprintTools(transformedBody)
+		transformedBody, toolNameMap := translator.ConcealOpenCodeV2FingerprintTools(transformedBody, true)
 		req.Ctx = translator.WithToolNameMap(req.Ctx, toolNameMap)
 		w = NewToolNameRestoringWriter(w, toolNameMap)
 
@@ -613,12 +614,13 @@ func ForwardOpencode(w http.ResponseWriter, req *Request) error {
 			for k, v := range req.Config.StaticHeaders {
 				cfg.StaticHeaders[k] = v
 			}
-			cfg.StaticHeaders["x-relay-path"] = "/zen/v1/responses"
-		} else if !strings.HasSuffix(cfg.BaseURL, "/responses") {
+			cfg.StaticHeaders["x-relay-path"] = "/inference/v1/responses"
+		} else if isOpenCodeOrigin(cfg.BaseURL) {
 			baseURL := strings.TrimRight(cfg.BaseURL, "/")
-			if strings.HasSuffix(baseURL, "/chat/completions") {
-				baseURL = strings.TrimSuffix(baseURL, "/chat/completions")
-			}
+			baseURL = strings.TrimSuffix(baseURL, "/chat/completions")
+			cfg.BaseURL = opencodeInferenceBase(baseURL) + "/responses"
+		} else if !strings.HasSuffix(cfg.BaseURL, "/responses") {
+			baseURL := strings.TrimSuffix(strings.TrimRight(cfg.BaseURL, "/"), "/chat/completions")
 			cfg.BaseURL = baseURL + "/responses"
 		}
 		cfg.StaticHeaders = proxy.BuildOpenCodeHeaders(cfg.StaticHeaders, req.SessionID, req.IsStream)
@@ -647,7 +649,7 @@ func ForwardOpencode(w http.ResponseWriter, req *Request) error {
 
 	body := InjectReasoningContent(req.Body, "opencode")
 	// opencode Chat Completions path: same conceal + restore of tool names.
-	body, toolNameMap := translator.ConcealFingerprintTools(body)
+	body, toolNameMap := translator.ConcealOpenCodeV2FingerprintTools(body, false)
 	req.Ctx = translator.WithToolNameMap(req.Ctx, toolNameMap)
 	w = NewToolNameRestoringWriter(w, toolNameMap)
 
@@ -668,6 +670,7 @@ func ForwardOpencode(w http.ResponseWriter, req *Request) error {
 	}
 
 	cfg := *req.Config
+	cfg.BaseURL = opencodeChatURL(cfg.BaseURL)
 	cfg.StaticHeaders = proxy.BuildOpenCodeHeaders(cfg.StaticHeaders, req.SessionID, true)
 
 	ctx := req.Ctx
@@ -696,6 +699,31 @@ func ForwardOpencode(w http.ResponseWriter, req *Request) error {
 		data = converted
 	}
 	return jsonResponse(req.Ctx, w, bytes.NewReader(data), req.TranslateResp, req.ResponseBuf)
+}
+
+// opencodeInferenceBase rewrites only the OpenCode free-tier API prefix;
+// custom test and relay hosts retain their configured origin/path.
+func opencodeInferenceBase(base string) string {
+	base = strings.TrimRight(base, "/")
+	if !isOpenCodeOrigin(base) {
+		return base
+	}
+	base = strings.TrimSuffix(base, "/chat/completions")
+	base = strings.TrimSuffix(base, "/zen/v1")
+	return base + "/inference/v1"
+}
+
+func opencodeChatURL(base string) string {
+	base = strings.TrimRight(base, "/")
+	if isOpenCodeOrigin(base) {
+		return opencodeInferenceBase(base) + "/chat/completions"
+	}
+	return base
+}
+
+func isOpenCodeOrigin(rawURL string) bool {
+	parsed, err := url.Parse(rawURL)
+	return err == nil && parsed.Hostname() == "opencode.ai"
 }
 
 var opencodeGoMessagesModels = map[string]bool{
@@ -1141,7 +1169,7 @@ func isOpencodeResponsesModel(model string) bool {
 	if parenIdx := strings.IndexByte(base, '('); parenIdx != -1 {
 		base = base[:parenIdx]
 	}
-	return strings.Contains(base, "muse-spark") || base == "grok-4.6" || base == "gpt-5.6-luna"
+	return base == "muse-spark-1.2-contributor-free" || base == "muse-spark-1.3-contributor-free"
 }
 
 func deriveOpencodeSession(rawSession, clientTool, connID string) string {

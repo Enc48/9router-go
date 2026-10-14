@@ -1,5 +1,421 @@
 # Changelog
 
+## [v1.9.12] - 2026-10-15
+
+### Fixed
+- **Deterministic request serialization for ALL providers**: chat-completions bodies leaving via `newJSONRequest` are now re-serialized with `encoding/json/v2` `Deterministic(true)` (map members sorted). Previously only the opencode/zen lanes carried per-lane `marshalStable` calls; a new provider serving a DeepSeek model did not inherit the fix, and any rewrite-free turn kept its original randomized-bytes body — turning the shared prefix of every turn after the first into a full prompt-cache miss on DeepSeek (and other prefix-caching upstreams). Non-chat payloads (OAuth token posts, Gemini `contents`, malformed JSON) pass through byte-identical, so signed flows (e.g. COSY) are unaffected. Parity note: the JavaScript `decolua/9router` original is deterministic by construction (JS object insertion order); this restores that property in the Go rewrite.
+
+### OpenCode: free tier moved to the /inference/v1 gate with the v2 client fingerprint
+
+Upstream decolua/9router#4842 parity (Closes #317, supersedes #318 and #319):
+OpenCode v2 moved free inference off /zen/v1; every free request there now
+answers 403 FreeTierError.
+
+- The keyless free executor dials /inference/v1/{chat/completions,responses}.
+  A base URL carrying the /zen/v1 prefix is rewritten host-agnostically,
+  custom endpoints stay untouched, and relays carry the lane in x-relay-path.
+- Fingerprint headers follow the v2 CLI: User-Agent opencode/<channel>/
+  <version>/<client> with v1 shapes rejected, x-opencode-session-id,
+  x-session-affinity and x-session-id mirror one session (a downstream hint
+  moves all four together), the rejected x-opencode-request is never sent,
+  and the project defaults to "global" like upstream.
+- Session ids keep a small counter: generated and translated prefixes pin the
+  counter to 1 exactly like the CLI, so non-OpenCode clients stop tripping
+  the gate under concurrent load.
+- The request body declares OpenCode's exact read and shell tools — verbatim
+  descriptions and parameter schemas from the v2 CLI, strict:false on the
+  Responses lane. A caller tool reusing one of those names with a different
+  definition travels under a *_client alias (history and tool_choice
+  retargeted); appended placeholders get the upstream singular/plural note,
+  never on Claude-shaped bodies. tool_choice passes through untouched except
+  on the Responses lane, where auto-only models collapse to "auto" and a
+  forced choice naming no declared tool is dropped.
+- Paid lanes are deliberately narrow: opencode-zen keeps /zen/v1 with the v1
+  identity and quartet cloaking for paid ids, and opencode-go keeps its
+  predicate, v1 UA and request ids. Only curated free-tier ids move:
+  keyed requests for them 403 ("free tier can only be used from within
+  OpenCode", probed live on muse-spark-1.3-contributor-free), so zen and go
+  forward those to the keyless gate with public credentials, v2 cli identity
+  and the exact fingerprint. big-pickle stays on zen (no live 403 evidence;
+  the lane table carries it as paid chat). With no go connection configured,
+  the paid go lane borrows the key from an active opencode-zen connection
+  (key only — provider, BaseURL and lanes stay go), operator-requested.
+
+Verified with `go test -count=1 ./internal/proxy/ ./internal/proxy/executor/
+./internal/translator/ ./internal/providers/ ./internal/handlers/chat/`:
+verb gate-contract pins (verbatim schemas, strict:false, note wording),
+lane predicates for free vs go, v1 identity on paid lanes, the zen keyed-lane
+guard, session mirrors, and the mock E2E shapes.
+
+### ✨ feat(ratelimit): per-key lifetime token quota and FIFO request queue
+
+- **Lifetime token quota**: new `tokenQuota` column per API key. It caps the
+  cumulative prompt+completion tokens a key may spend over its whole life;
+  once reached, requests are refused with `403` and `X-Token-Quota-Limit` /
+  `X-Token-Quota-Used` headers. Usage is summed from `usageHistory` under both
+  the masked key this gateway writes and the raw key the upstream dashboard
+  wrote. A failed usage read fails **open**, so a storage blip cannot lock a
+  key out of a service it has always been able to call.
+- **Request queue**: new `queueTimeoutMs` column. A request that exceeds the
+  key's RPM or concurrency limit now waits in a **FIFO queue** (head-first, no
+  overtaking) for the RPM window to roll or a concurrent slot to free, up to
+  the timeout, before returning `429`. Defaults to 60s when a concurrency cap
+  is set; a key with no queueable limit keeps the previous immediate-refusal
+  behaviour. TPM is deliberately **not** queued — a token bucket refills
+  continuously and would live-lock a waiter.
+- **Atomic admission**: a request refused on concurrency does not consume an
+  RPM stamp, so concurrency pressure cannot silently drain the RPM budget.
+- **Observability**: new `router_rate_limit_queue_seconds` histogram records
+  how long requests wait for a slot.
+- **Dashboard / API / backup**: `tokenQuota` and `queueTimeoutMs` are exposed
+  on `GET /api/keys`, accepted on `PUT /api/keys/{id}` (non-negative; omitted
+  leaves the stored value unchanged), shown in the key policy dialog with a
+  quota badge, and carried through database backup/restore so a restore cannot
+  silently lift a throttle. Schema columns are additive; existing installs
+  upgrade in place, and `usageHistory` gains an `apiKey` index so the quota
+  sum is not a full table scan on every quota-bearing request.
+- **No behaviour change for an existing install.** A key with no
+  `queueTimeoutMs` of its own only queues when it also has its own concurrency
+  cap (the upstream 60s default). A concurrency cap that arrives purely from
+  the operator's global default keeps the pre-change immediate refusal, so a
+  global setting cannot silently introduce queueing on every key.
+- Verified: `go build ./...`, `go vet ./internal/...`, and `go test -count=1
+  ./internal/...` all pass; new queue/quota/schema/backup/full-stack tests pass
+  under `-race`.
+
+### 🔄 fix(dashboard): group accounts by provider first and set default priority on connection creation
+
+- **Background**: Previously, `providerConnections` rows created via OAuth lacked a `priority` value
+  and were stored as `NULL`. In `sortProviderConnections`, `NULL` priorities defaulted to `math.MaxInt`
+  and were compared across providers before grouping by provider. Consequently, a newly added account
+  was pushed to the very end of the database—past accounts of other providers—and landed isolated on
+  subsequent pagination pages.
+- **Provider-First Grouping**: `sortProviderConnections` now groups by provider first so accounts of
+  the same provider always remain contiguous in Quota Tracker, followed by priority and name.
+- **Default Priority**: Added `ResolveDefaultPriority(provider)` in `internal/db/connections.go`
+  and updated OAuth connection inserts so new accounts receive an explicit sequential priority.
+
+### Dashboard: copying an API key no longer copies the mask
+
+Issue #310 reported that the Copy button on an API-key row put the masked
+display value on the clipboard (`sk-c07…c93e`) rather than the credential, so
+the pasted key could not authenticate. Revealing the key first worked around it,
+but copying a secret that depends on whether it happened to be on screen is not
+a usable workflow.
+
+The copy button took whatever the cell was rendering, and a cell that has not
+been revealed renders `keyDisplay` — the mask. It now copies the stored secret
+directly and ignores the reveal state, so Copy works on a freshly loaded
+dashboard. A row the server holds no plaintext for (a caller authenticated with
+an engine client key, or a row created before #199 whose secret was hashed away)
+has nothing usable to copy; it now reports that instead of silently putting an
+unusable mask on the clipboard.
+
+Verified by a new end-to-end case that copies from an un-revealed row, reads the
+clipboard, and authenticates the copied value against the running gateway with
+`GET /v1/models` — it returns `sk-1…fe7b` before the fix and a working `sk-…`
+key after.
+
+### Codex + GPT-6 Sol: `400 Unknown parameter: 'input[0].content'` when a token saver is on
+
+- **What was broken.** A `/v1/responses` client routed to a Responses-speaking upstream (`codex`, `perplexity-agent`, `opencode`, `opencode-zen`, `grok-cli`) failed with `400 {"error":{"message":"Unknown parameter: 'input[0].content'","code":"unknown_parameter"}}`, which the client only saw as a `[fallback] upstream failed provider=codex model=gpt-6-sol status=400` log line. Every request failed while the same model worked with token savers turned off — and for `gpt-6-sol` / `gpt-6-luna` the whole Responses-Lite prefix the executor adds is affected, so no other model on the connection worked either. Closes #307.
+- **Why.** `tokensaver.InjectSystemPrompt` had one injector for both `messages[]` and `input[]`. On a Responses body it wrote a **Chat** system turn, `{"role":"system","content":"<text>"}`, at `input[0]`. The Responses item schema wants `{"type":"message","role":"system","content":[{"type":"input_text","text":"…"}]}` — a turn with no `type` and a string `content` where the validator reads a block array. Upstream dispatches by wire shape and keeps its two injectors apart (`open-sse/rtk/systemInject.js`: `injectChatSystem` vs `injectResponsesInputSystem`); Go had collapsed them. The trigger is any active token saver — Caveman, Ponytail or ADHD — since those are the settings that inject a system prompt at all; RTK alone never reaches this code.
+- **How it is fixed.** `InjectSystemPrompt` now dispatches on the same three shapes upstream does, and `input[]` gets its own injector: it appends the prompt as an `input_text` block to an existing system/developer **message item**, prepends one when the conversation has none, and widens a client-supplied string `content` into blocks rather than leaving a string behind. An item without `type:"message"` is never adopted. Chat Completions bodies are untouched.
+- **Verified.** `internal/tokensaver` covers the three Responses paths; the new `internal/integration/codex_responses_tokensaver_test.go` boots the real router with a `codex` connection aimed at a fake `/responses` upstream and asserts on the outbound body — a control case with the saver off and the regression case with Caveman on. The regression case fails on `main` with `input[1].content is string, want an array of content blocks` and passes here. `go test ./...` is green.
+
+### 🎨 fix(dashboard): align Antigravity quota with standard QuotaTable layout and restore row hiding
+
+- **Background**: The 2x2 nested grid card introduced in #282 created an oversized,
+  bloated card height on accounts with multiple Antigravity connections, diverged from
+  the sleek layout of Codex and other providers, and dropped row-hiding controls (`onHideQuota`).
+- **Refinement**: Reverted Antigravity rendering to the standard, compact `QuotaTable.svelte`
+  component, preserving the 100% scale and 4 canonical window buckets while restoring
+  row-hiding capabilities and uniform card sizing.
+
+### service: five follow-ups from PR #303 (issue #304)
+
+Tech debt recorded during the review of `feat(cli): service autostart management`.
+None of these changed runtime behaviour on Linux or macOS, but all five were
+wrong in a way a user could hit.
+
+- **`WorkingDirectory=` is now escaped.** `ExecStart` already went through
+  `commandLine`, but the neighbouring line wrote the directory raw. systemd
+  unquotes the assignment rather than splitting on whitespace, so a binary
+  installed under `/opt/my apps/` produced a unit that failed to parse. The
+  value now goes through `quoteSystemdValue`, which escapes what systemd's
+  unquoter actually interprets — a backslash or quote (C escapes inside double
+  quotes) and `%` (every assignment is specifier-expanded, so a literal percent
+  is `%%`). The path is converted with `filepath.ToSlash`, which also makes the
+  rendered unit identical on a Windows test runner, where `filepath.Dir` was
+  returning `\usr\local\bin`.
+- **`enable-linger` now runs even when `systemctl start` fails.** The early
+  return on the failure path skipped it, so the one scenario install exists for
+  — the gateway already holding the port from `9router-go start` — lost linger
+  and the unit died at logout while the CLI reported the entry as enabled.
+- **`uninstallCron` no longer claims a removal that failed.** `os.Remove`'s
+  error was discarded and `desktopRemoved` was set unconditionally, so a
+  permission-denied delete printed "Autostart uninstalled" with
+  `~/.config/autostart/9router-go.desktop` still in place and set to fire at the
+  next login. Removal is now the source of truth, the rule the launchd and
+  OpenRC backends in the same package already followed.
+- **Windows task status is locale-independent.** `statusWindowsTask` matched the
+  literal `Running` in `schtasks /query` output, which follows the system
+  locale: on a non-English Windows the literal never appears and `service
+  status` reported `Active: false` for a task that was running. The state now
+  comes from `Get-ScheduledTask` as a number, so it does not depend on the UI
+  language. When that probe cannot answer — PowerShell absent, or blocked by
+  execution policy — the new `Info.ActiveUnknown` makes `service status` print
+  `Active: unknown` instead of a `false` that is a guess presented as fact.
+- **Three `internal/service` tests now pass on Windows.** CI only ran
+  ubuntu-latest, so the failure was invisible: one assertion compared against
+  a POSIX path that `filepath.Dir` could not produce on Windows, and two needed
+  `SeCreateSymbolicLinkPrivilege` to build their runit activation symlink.
+  `os.Symlink` and `os.Remove` are now seams, the way `readCrontab`/`writeCrontab`
+  already were, so the runit activation path is asserted as a request on runners
+  without symlink privilege instead of failing. No assertion coverage was
+  dropped.
+
+Verified with `go test -count=1 ./internal/service/` green on Windows, the
+built binary's `service status` run end to end, and the new
+`windows-service` CI job added to `.github/workflows/ci.yml` so this class of
+OS-conditional regression is caught on a PR rather than on someone's laptop.
+
+### feat(cli): service autostart management
+
+`9router-go service install` registers the gateway to start on boot using
+whatever init the machine actually runs:
+
+- **systemd** — always the per-user unit (`systemd --user`), so install stays
+  unprivileged and can never touch a root-owned unit. Every
+  install/uninstall/status/control call goes through one `systemdScope` helper,
+  which keeps `--user` from being dropped and the command from landing on the
+  system bus (root prompt, user unit left enabled). There is no system-unit
+  scope or `--system` flag.
+- **launchd** (macOS), **runit** (root, or `~/service` under a user `runsvdir`),
+  and **cron `@reboot`** plus an XDG autostart desktop entry, all tagged with a
+  `# 9router-go-autostart` marker so install is idempotent and uninstall never
+  touches the user's own entries.
+- **OpenRC** is a system service and needs root: it has no per-user scope, so
+  `service install` refuses without it rather than silently installing a
+  different backend (run with `sudo`, or use `--backend cron`).
+- **Windows** — a scheduled task created with `schtasks` at logon, run as the
+  installing user rather than `SYSTEM` (a SYSTEM task reads a different
+  %APPDATA% data dir). Creating the task requires an Administrator console.
+
+Companions: `service start|stop|restart` drive the supervised service (falling
+back to the pid-file daemon for cron, which has no supervisor), `status` reports
+the entry in effect, and `uninstall` stops/disables before deleting and reports
+failure when the file survives. `install` warns when the `start` daemon is still
+holding the port, and an unmatched positional argument now fails fast with
+`unknown command` instead of booting a second gateway.
+
+The home directory is read through a package seam (`userHomeDir`) rather than
+`HOME`, because `os.UserHomeDir` reads `%USERPROFILE%` on Windows; tests point
+every user-scoped path (systemd unit, launchd plist, autostart entry, runit
+`~/service`) at a temp home instead of the runner's real one. Windows task
+commands are quoted for `cmd.exe` rather than the POSIX shell, so a path under
+`C:\Program Files\...` still fires.
+
+Verified with `go test ./...` (all per-OS backends are exercised from one runner
+through the seams) plus `make build`.
+
+### 🐛 The Quota Tracker provider filter pushed the page down instead of opening over it
+
+Opening "All providers" on the Quota Tracker shoved the quota cards out of the
+way instead of overlaying them, which is what made the page look broken.
+
+The provider panel was the only dropdown in the dashboard that measured itself
+against its trigger and wrote `left` / `top` inline while **not** being
+`position: fixed` and not being portalled. The computed position came back
+`static`, so the placement maths was dead output: `left: 896px; top: 140px` was
+written onto a plain in-flow `<div>`, and `placePanel` / `placementStyle` were
+doing work no browser honoured.
+
+Everything around it was already correct and gave the bug away on re-reading —
+the click-outside handler checks `providerDropdownPanel.contains(target)`
+precisely because the panel is expected to be detached, the resize and scroll
+listeners already reposition it, and a comment states the panel *is* fixed. Only
+the element itself was missing the two attributes every sibling panel has:
+
+| Panel | `fixed` | `use:portal` |
+| :--- | :---: | :---: |
+| `SectionMenu`, `CountedSelect`, `Menu`, `ViewSelect` | ✅ | ✅ |
+| `QuotaTrackerView` provider filter | ❌ | ❌ |
+
+The panel now carries the same `use:portal` + `fixed z-50` pair the other five
+use, so it is anchored to the window rather than to the toolbar row, and the
+long provider list overlays the cards instead of pushing them.
+
+Verified in a browser against a running gateway: computed `position` is `fixed`
+and the parent is `BODY`; selecting an option still filters (label and row
+update); a click on the panel's own background leaves it open while a click
+outside closes it, so the click-outside handler still resolves through the
+detached node; and at a 390px phone width the panel measures 256px wide with
+both edges on screen.
+
+### Added
+- **SumoPod provider**: `sumopod` registered as an API-key provider (bearer transport, OpenAI-compatible) pointing at `ai.sumopod.com/v1/chat/completions` with the `sp` short alias and a 61-model catalogue synced from the live `/v1/models` response (embeddings excluded). Live `/v1/models` import is wired via `modelsListURL` (bearer, like tokenharbor/dahl).
+
+### 🐛 Quota Tracker now shows 5h / weekly windows for Claude OAuth accounts (#293)
+
+- Claude connections were listed in the tracker but never read: `fetchProviderUsage` had no
+  `claude` case, so every account answered `{plan:"claude", quotas:{}}` and the dashboard
+  printed "Account active. No quota limits tracked." without any upstream call.
+- The dashboard now reads `GET api.anthropic.com/api/oauth/usage` (port of upstream
+  `getClaudeUsage`) and renders `session (5h)`, `weekly (7d)` and model-scoped weekly rows
+  (`weekly opus (7d)`, `weekly fable (7d)`, …) with used / remaining / resetAt.
+- Reads are cached per token for 60s, a 429 puts the token on a cooldown (honouring
+  `Retry-After`) and keeps serving the last good reading; a 401/403 goes through the existing
+  refresh-and-retry path.
+
+### 🐛 `/v1/models` top-level `context_length` / `max_completion_tokens` now match `capabilities` (#291)
+
+- Top-level limits came from the generic substring table (`claude-*` → 200000/8192) while
+  `capabilities.contextWindow` / `maxOutput` carried the per-model values, so one entry
+  contradicted itself (e.g. `cc/claude-opus-5-5`: 200000/8192 vs 1000000/128000). Clients that
+  read the OpenAI-style fields — such as `pi-9router-ext` — capped Claude output at 8192.
+- The top-level fields (and `/v1/models/info`) are now filled from the same chain as
+  `capabilities` (declared custom limits → per-model caps → catalog → substring table); the
+  substring table only fills gaps.
+- `claude-fable-5-1` gets its documented 1M context / 128K output in the per-model table.
+
+### 🐛 `reasoning_effort` to a Claude upstream no longer fails with `thinking.type: Field required` (#289)
+
+- An OpenAI-shaped client sending `reasoning_effort` (or Responses `reasoning.effort`) to a Claude
+  upstream got `thinking: {"display": "summarized"}` with no `type`, and Anthropic answered
+  `400 thinking.type: Field required`.
+- The request translation now sets the missing `type`, mirroring the `claude-adaptive` /
+  `claude-budget` branches of upstream `thinkingUnified.js`: `adaptive` + `output_config.effort`
+  for adaptive models, `enabled` + `budget_tokens` otherwise. `max_tokens` is raised to
+  `budget_tokens + 1024` (capped at the model's output limit) so the answer is not starved; the
+  budget is only shrunk when it alone reaches the ceiling. An explicit `thinking.type` from the
+  client is never overwritten.
+- `reasoning_effort: none/off` (or Responses `effort: none`) with a captured `display` now sends
+  `thinking: {"type": "disabled"}` instead of a typeless object.
+- The thinking format is looked up under the real lane provider (`minimax-code`, `opencode-zen`,
+  `opencode-go`) instead of a hardcoded `claude`.
+- `claude-fable-5` is declared `claude-adaptive` in the per-model table; it used to fall through the
+  `*claude*fable*` glob to `claude-budget`, which would have sent the manual `enabled`/`budget_tokens`
+  mode that current Claude models do not accept.
+
+fix(codex): strip temperature/top_p before forwarding to the Codex backend
+
+Editors such as Zed send `temperature` on every chat-completions turn, and
+`buildResponsesBody` forwarded it as-is. The ChatGPT Codex OAuth backend
+answered `400 {"detail":"Unsupported parameter: temperature"}` on the reasoning
+models behind Codex, so each turn burned one failed upstream call before the
+combo moved on — the 400 is request-scoped, so the connection was never locked
+and the failure repeated every time.
+
+`temperature` and `top_p` now join `max_tokens` / `max_completion_tokens` /
+`max_output_tokens` in `stripCodexUnsupportedTokenParams`. The strip stays on
+the Codex forward path only: `buildResponsesBody` is shared with the other
+Responses-API providers (grok-cli, kimi, muse, opencode-zen), whose backends do
+accept the field, so moving it there would silently change their requests.
+
+Parity with upstream `open-sse/executors/codex.js`, whose `transformRequest`
+deletes `body.temperature` and `body.top_p` alongside the generation limits.
+
+**Verification**: `go test ./internal/proxy/executor/` passes. The fake upstream
+in `TestForwardCodex_UpstreamNeverSeesTokenParams` now rejects all five
+parameters the way ChatGPT does and the client body carries `temperature` and
+`top_p`, so the wiring — not just the helper — is pinned. Manually verified on
+Windows with Zed: `gpt-6-astra` went from a 400 on every turn to 200.
+
+**Known gap (not introduced here)**: upstream deletes a longer list
+(`frequency_penalty`, `presence_penalty`, `logprobs`, `top_logprobs`, `n`,
+`seed`, `user`, `metadata`, `stream_options`, `safety_identifier`,
+`previous_response_id`) and then filters the body through a Responses-API
+allowlist. This port still deletes only the five fields above, so a client
+sending e.g. `frequency_penalty` to Codex can still hit the same 400.
+
+### 📦 feat(settings): database storage & retention profile (observability limits)
+
+- **Background**: `requestDetails` previously retained diagnostic entries with hardcoded limits
+  (500,000 rows ceiling, 30 days) and unconditionally logged massive payloads on every call,
+  causing SQLite databases to swell up to hundreds of megabytes on user machines.
+- **Observability Mode**: Added `observabilityMode` (`full`, `errors_only`, `off`). When set to
+  `off`, request detail logging is bypassed completely (<10 MB permanent DB). When set to `errors_only`,
+  only failed/fallback transactions are recorded.
+- **Configurable Retention**: Added `retentionDays` and `maxRequestRecords` (default 5,000) settings.
+- **Maintenance Endpoints**: Added `GET /api/settings/database/stats`, `POST /api/settings/database/prune`,
+  and `POST /api/settings/database/vacuum` allowing operators to prune and reclaim free pages back to disk.
+
+### 🛡️ feat(security): SSRF protection via safe network dialer
+
+- **Background**: Custom provider nodes and custom proxies previously permitted dialing
+  any IP address without restriction, posing a risk of internal network scanning or
+  cloud metadata exposure (169.254.169.254).
+- **Hardening**: Implemented `NewSafeDialer()` and `NewSafeTransport()` in `internal/proxy/ssrf.go`,
+  enforcing destination IP inspection at the socket control level. Dials to loopback, RFC 1918
+  private LANs, link-local, and cloud metadata addresses are blocked by default with `ErrSSRFBlocked`.
+- **Operational Override**: Operators running local inference engines (such as Ollama on localhost)
+  can explicitly permit private networking by setting `ALLOW_PRIVATE_NETWORKING=true`.
+
+### ✨ feat(quota): 4-card clean layout & 100% scale for Antigravity quota
+
+- **Background**: Antigravity quotas were computed against an artificial scale of `1000.0`,
+  and displayed as flat model lists rather than the 4 canonical time-window quota buckets
+  provided by Google Antigravity (`retrieveUserQuotaSummary`).
+- **Backend**: Standardized Antigravity quotas to a pure 100.0 percentage scale with window
+  metadata (`5h` and `weekly`).
+- **Dashboard UI**: Introduced `AntigravityQuotaCard.svelte` rendering a 2x2 grid (Gemini 5h,
+  Gemini Weekly, Claude/GPT 5h, Claude/GPT Weekly) with color-coded progress bars and countdown timers.
+
+### 🐛 Issue #280 — MiMo and every other provider vanished from the topology map, and the Test button faked usage
+
+Two defects made a provider the operator never used look permanently busy on
+`Usage → Overview`, and they compounded each other.
+
+- **The "Test" button metered probes as traffic.** `POST /api/models/test` is
+  dispatched straight into the chat handler with a probe context
+  (`media/model_test_ping.go:84`), and the probe context is honoured at every
+  other side effect in the forwarding path — connection unlocks, cooldown
+  clears, model-lock releases, fallback skips. The one gap was the usage write:
+  `tryForwardWithConnection` called `logUsage` outside the
+  `IsProbeContext` guard, so a single click wrote a real `usageHistory` row and
+  a `usageDaily.byProvider` bucket. A provider with a passing test appeared to
+  have served a request nobody sent, and its tokens landed in the daily totals
+  and the est. cost. "Check all models" multiplies this by the catalog size.
+  `tryForwardWithConnection` now returns early on a probe, before any usage is
+  written — the request still reaches the provider, so the button still works.
+
+- **The topology map drew every configured connection, forever.** The map is
+  built client-side in `AnalyticsView` from five sources, and four of them are
+  usage-windowed through `stats.byProvider`. The fifth was not: the connections
+  loop drew any non-inactive `providerConnections` row. Since that list is the
+  whole table, a provider the operator had merely configured sat on the map
+  regardless of the selected window, and outlived both the connection and the
+  period. It is now gated on the same window as every other source. The lookup
+  resolves a connection's stored id against the catalog's canonical id and its
+  published alias, because the backend keys usage canonically while a
+  connection row may hold either.
+
+Verified in a real browser against a running gateway seeded with an active
+`xiaomi-mimo` connection and zero traffic: the map rendered the empty state
+("No providers connected") where it previously drew a MiMo node. The probe fix
+is covered by `internal/integration/model_test_probe_usage_test.go`, which also
+asserts the probe still reaches the fake upstream — a guard that short-circuited
+before the request would pass a usage-only test while breaking the button.
+
+### Fixed
+- `ollama-cloud` provider connections were stuck on a legacy provider id that
+  never existed in the catalog (only `ollama` does — the id came from a
+  sibling project's naming, synced in by hand). Chat requests on those
+  connections failed with `has no baseUrl in connection data and is not in
+  KnownProviders`, and the Analytics provider topology card rendered the
+  connection's account email as the node label instead of a provider name.
+  `MigrateLegacyProviderIDs` now rewrites `ollama-cloud` → `ollama` on every
+  boot (idempotent, best-effort — a failure logs and does not block
+  startup), and `topologyName` in `AnalyticsView.svelte` rejects any
+  fallback label containing `@` so an OAuth account email can never stand in
+  for a provider name again, independent of the email-privacy toggle.
+- Verified: `go test ./internal/db/...` (new
+  `TestMigrateLegacyProviderIDs`/`TestMigrateLegacyProviderIDsNilDB`),
+  `bun test src` (353 pass / 0 fail), `make vet-svelte` (0 unresolved
+  identifiers, baseline tightened 83 → 82).
+
+
 ## [v1.9.11] - 2026-10-12
 
 ### 🖼️ `muse.png` 404 — Meta Muse tile rendered empty

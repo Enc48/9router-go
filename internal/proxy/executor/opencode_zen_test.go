@@ -2,7 +2,8 @@ package executor
 
 import (
 	"context"
-	json "encoding/json/v2"
+	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -320,6 +321,42 @@ func TestNormalizeZenResponsesBody_ReasoningShapes(t *testing.T) {
 			}
 			if rm["summary"] != tt.wantSum {
 				t.Errorf("reasoning.summary = %v, want %v", rm["summary"], tt.wantSum)
+			}
+		})
+	}
+}
+
+// Free-tier zen models moved off /zen/v1 with the OpenCode v2 inference gate
+// (decolua/9router#4842). A free chat-lane model must dial /inference/v1
+// while a paid one keeps /zen/v1, and the connection's key still rides along.
+func TestForwardOpencodeZen_FreeModelTakesInferenceGate(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		model string
+		lane  string
+		want  string
+	}{
+		{"free chat model", "deepseek-v4-flash-free", "/chat/completions", "/inference/v1/chat/completions"},
+		{"free responses model", "muse-spark-1.3-contributor-free", "/responses", "/inference/v1/responses"},
+		{"paid chat model keeps zen", "deepseek-v4-pro", "/chat/completions", "/zen/v1/chat/completions"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			probe := newZenProbe(t, zenChatReply)
+			rec := httptest.NewRecorder()
+			body := fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"hi"}],"stream":true}`, tc.model)
+			req := &Request{
+				Ctx:      context.Background(),
+				Client:   probe.server.Client(),
+				Config:   zenConfig(probe),
+				APIKey:   "sk-zen",
+				Body:     []byte(body),
+				IsStream: true,
+			}
+			if err := ForwardOpencodeZen(rec, req); err != nil {
+				t.Fatalf("ForwardOpencodeZen: %v", err)
+			}
+			if probe.path != tc.want {
+				t.Errorf("upstream path = %q, want %q", probe.path, tc.want)
 			}
 		})
 	}

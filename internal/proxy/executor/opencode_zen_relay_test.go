@@ -13,43 +13,56 @@ func TestZenRelayPath(t *testing.T) {
 		name  string
 		heads map[string]string
 		lane  string
+		model string
 		want  string
 	}{
 		{
 			name:  "an origin-only target falls back to the zen lane",
 			heads: map[string]string{"x-relay-target": "https://opencode.ai"},
 			lane:  zenResponsesPath,
+			model: "muse-spark-1.3",
 			want:  "/zen/v1/responses",
 		},
 		{
 			name:  "an origin with a trailing slash still resolves the lane",
 			heads: map[string]string{"x-relay-target": "https://opencode.ai/"},
 			lane:  zenResponsesPath,
+			model: "muse-spark-1.3",
 			want:  "/zen/v1/responses",
 		},
 		{
 			name:  "the messages lane resolves independently",
 			heads: map[string]string{"x-relay-target": "https://opencode.ai"},
 			lane:  zenMessagesPath,
+			model: "claude-sonnet-4-6",
 			want:  "/zen/v1/messages",
+		},
+		{
+			name:  "a free model carries the inference prefix",
+			heads: map[string]string{"x-relay-target": "https://opencode.ai"},
+			lane:  zenResponsesPath,
+			model: "muse-spark-1.3-contributor-free",
+			want:  "/inference/v1/responses",
 		},
 		{
 			name:  "no relay headers at all",
 			heads: map[string]string{},
 			lane:  zenMessagesPath,
+			model: "claude-sonnet-4-6",
 			want:  "/zen/v1/messages",
 		},
 		{
 			name:  "a nil config",
 			heads: nil,
 			lane:  zenResponsesPath,
+			model: "muse-spark-1.3",
 			want:  "/zen/v1/responses",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := &providers.ProviderConfig{BaseURL: "https://relay.example", StaticHeaders: tt.heads}
-			if got := zenRelayPath(cfg, tt.lane); got != tt.want {
+			if got := zenRelayPath(cfg, tt.model, tt.lane); got != tt.want {
 				t.Errorf("zenRelayPath = %q, want %q", got, tt.want)
 			}
 		})

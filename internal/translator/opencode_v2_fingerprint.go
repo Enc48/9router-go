@@ -10,8 +10,27 @@ const openCodeReadDescription = "Read the contents of a file or directory. Suppo
 const openCodeShellDescription = "Execute a shell command and return its output. Commands run on Linux using bash. Quote file paths containing spaces or special characters. Prefer dedicated tools over shell commands when possible. When output is large, the full result is saved to a file and a truncated preview is returned. Rely on automatic truncation unless filtering the output is more useful. Commands accept an optional timeout, background commands have no timeout by default. Background commands return immediately, and you will be notified when they complete. DO NOT poll for completion."
 
 // ConcealOpenCodeV2FingerprintTools ports the OpenCode v2 read/shell
-// fingerprint. flat is true for Responses API tools and false for chat tools.
-func ConcealOpenCodeV2FingerprintTools(body []byte, flat bool) ([]byte, map[string]string) {
+// fingerprint and canonicalizes the request so any caller body — a clean
+// direct API client or a harness sending Claude/OpenAI shapes with extra
+// fields — ends up in the form the /inference/v1 gate accepts
+// (decolua/9router#4842):
+//
+//   - caller tools named exactly read/shell with a different definition
+//     travel under a *_client alias (history and tool_choice retargeted);
+//   - the exact OpenCode read/shell definitions are appended when absent;
+//   - on the Responses lane every tool is rebuilt into the canonical flat
+//     shape, dropping foreign keys (cache_control, strict, …), defaulting
+//     missing schemas and dropping nameless entries, like the upstream
+//     executor's normalizeResponsesTools;
+//   - on the chat lane caller tools keep their shape but gain a default
+//     object schema when missing, so no stub schema reaches the gate;
+//   - tool_choice "none" and "auto"/"any" objects collapse to "auto";
+//     a forced choice survives unless forceAutoChoice says the model is
+//     auto-only (the upstream forceAutoToolChoiceModels quirk), or the
+//     Responses lane drops a forced choice naming no declared tool.
+//
+// flat is true for Responses API bodies and false for Chat Completions.
+func ConcealOpenCodeV2FingerprintTools(body []byte, flat bool, forceAutoChoice bool) ([]byte, map[string]string) {
 	var request map[string]any
 	if len(body) == 0 || json.Unmarshal(body, &request) != nil {
 		return body, map[string]string{}
@@ -35,17 +54,7 @@ func ConcealOpenCodeV2FingerprintTools(body []byte, flat bool) ([]byte, map[stri
 			continue
 		}
 		seen[name] = true
-		toolMap, _ := tool.(map[string]any)
-		definition := toolMap
-		if fn, ok := toolMap["function"].(map[string]any); ok {
-			definition = fn
-		}
-		wantDescription := openCodeReadDescription
-		if name == "shell" {
-			wantDescription = openCodeShellDescription
-		}
-		params, _ := json.Marshal(definition["parameters"], json.Deterministic(true))
-		if definition["description"] == wantDescription && string(params) == openCodeV2Parameters(name) {
+		if isExactOpenCodeV2Definition(tool, name) {
 			kept = append(kept, tool)
 			continue
 		}
@@ -70,14 +79,23 @@ func ConcealOpenCodeV2FingerprintTools(body []byte, flat bool) ([]byte, map[stri
 		appended = append(appended, name)
 	}
 	request["tools"] = kept
+
+	var validNames map[string]bool
+	droppedChoice := false
+	if flat {
+		validNames = canonicalizeOpenCodeV2ResponsesTools(request)
+	} else {
+		defaultOpenCodeV2ChatToolSchemas(request)
+	}
 	if len(nameMap) > 0 {
 		aliasOpenCodeV2History(request, nameMap)
 		aliasOpenCodeV2Choice(request, nameMap)
 	}
-	if choice, ok := request["tool_choice"].(map[string]any); ok && choice["type"] == "none" {
-		request["tool_choice"] = "auto"
+	if flat {
+		dropNamelessOpenCodeV2FunctionCalls(request)
 	}
-	if flat && request["tool_choice"] == nil {
+	droppedChoice = normalizeOpenCodeV2ToolChoice(request, flat, forceAutoChoice, validNames)
+	if flat && request["tool_choice"] == nil && !droppedChoice {
 		request["tool_choice"] = "auto"
 	}
 	if len(appended) > 0 {
@@ -88,8 +106,7 @@ func ConcealOpenCodeV2FingerprintTools(body []byte, flat bool) ([]byte, map[stri
 			} else {
 				request["instructions"] = note
 			}
-		}
-		if !flat {
+		} else {
 			addOpenCodeChatNote(request, note)
 		}
 	}
@@ -98,6 +115,172 @@ func ConcealOpenCodeV2FingerprintTools(body []byte, flat bool) ([]byte, map[stri
 		return body, map[string]string{}
 	}
 	return out, nameMap
+}
+
+// isExactOpenCodeV2Definition reports whether tool already carries OpenCode's
+// verbatim description and parameter schema for the fingerprint name.
+func isExactOpenCodeV2Definition(tool any, name string) bool {
+	toolMap, ok := tool.(map[string]any)
+	if !ok {
+		return false
+	}
+	definition := toolMap
+	if fn, ok := toolMap["function"].(map[string]any); ok {
+		definition = fn
+	}
+	wantDescription := openCodeReadDescription
+	if name == "shell" {
+		wantDescription = openCodeShellDescription
+	}
+	params, _ := json.Marshal(definition["parameters"], json.Deterministic(true))
+	return definition["description"] == wantDescription && string(params) == openCodeV2Parameters(name)
+}
+
+// openCodeV2DefaultSchema is the fallback the upstream executor applies when a
+// tool carries no usable parameter schema: the gate rejects stub schemas.
+func openCodeV2DefaultSchema() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{}}
+}
+
+// usableOpenCodeV2Parameters returns the tool's parameter schema when it is a
+// JSON object, and reports whether the caller's entry (flat or nested) had one
+// at all.
+func usableOpenCodeV2Parameters(tool map[string]any) (map[string]any, bool) {
+	if params, ok := tool["parameters"].(map[string]any); ok {
+		return params, true
+	}
+	if fn, ok := tool["function"].(map[string]any); ok {
+		if params, ok := fn["parameters"].(map[string]any); ok {
+			return params, true
+		}
+	}
+	return nil, false
+}
+
+// canonicalizeOpenCodeV2ResponsesTools rebuilds every tool in the canonical
+// Responses shape (open-sse/executors/opencode.js normalizeResponsesTools):
+// only type/name/description/parameters survive, the name is trimmed and
+// capped, nameless or non-object entries are dropped, and a missing schema
+// becomes the default object. It returns the set of names that survived.
+func canonicalizeOpenCodeV2ResponsesTools(request map[string]any) map[string]bool {
+	tools, _ := request["tools"].([]any)
+	out := make([]any, 0, len(tools))
+	valid := make(map[string]bool)
+	for _, tool := range tools {
+		m, ok := tool.(map[string]any)
+		if !ok {
+			continue
+		}
+		name := strings.TrimSpace(toolNameOf(m))
+		if name == "" {
+			continue
+		}
+		if len(name) > 128 {
+			name = name[:128]
+		}
+		description, _ := m["description"].(string)
+		if fn, ok := m["function"].(map[string]any); ok {
+			if d, ok := fn["description"].(string); ok && description == "" {
+				description = d
+			}
+		}
+		params, _ := usableOpenCodeV2Parameters(m)
+		if params == nil {
+			params = openCodeV2DefaultSchema()
+		} else if params["type"] == "object" && params["properties"] == nil {
+			params["properties"] = map[string]any{}
+		}
+		entry := map[string]any{"type": "function", "name": name, "parameters": params}
+		if description != "" {
+			entry["description"] = description
+		}
+		valid[name] = true
+		out = append(out, entry)
+	}
+	request["tools"] = out
+	return valid
+}
+
+// defaultOpenCodeV2ChatToolSchemas leaves chat-shaped caller tools alone but
+// gives any tool without a usable parameter schema the default object schema,
+// in whichever shape (flat or nested under function) it already uses.
+func defaultOpenCodeV2ChatToolSchemas(request map[string]any) {
+	tools, _ := request["tools"].([]any)
+	for _, tool := range tools {
+		m, ok := tool.(map[string]any)
+		if !ok {
+			continue
+		}
+		if _, has := usableOpenCodeV2Parameters(m); has {
+			continue
+		}
+		if fn, ok := m["function"].(map[string]any); ok {
+			fn["parameters"] = openCodeV2DefaultSchema()
+			continue
+		}
+		if _, hasName := m["name"]; hasName {
+			m["parameters"] = openCodeV2DefaultSchema()
+		}
+	}
+}
+
+// dropNamelessOpenCodeV2FunctionCalls removes prior-turn function_call items
+// with no name; the Responses validator rejects them and a harness history can
+// carry one (open-sse/executors/opencode.js sanitizeResponsesItems).
+func dropNamelessOpenCodeV2FunctionCalls(request map[string]any) {
+	input, ok := request["input"].([]any)
+	if !ok {
+		return
+	}
+	out := make([]any, 0, len(input))
+	for _, item := range input {
+		m, ok := item.(map[string]any)
+		if ok && m["type"] == "function_call" {
+			if name, _ := m["name"].(string); strings.TrimSpace(name) == "" {
+				continue
+			}
+		}
+		out = append(out, item)
+	}
+	request["input"] = out
+}
+
+// normalizeOpenCodeV2ToolChoice collapses the tool_choice forms the gate
+// rejects. Accepted upstream: absent or the string "auto". Everything else
+// here degrades toward "auto" rather than risking a 403: the "none" string,
+// "auto"/"any"-typed objects, and any forced choice on an auto-only model.
+// A forced choice naming a tool that is not declared is dropped on the
+// Responses lane (upstream normalizeResponsesTools) and kept on the chat lane,
+// matching the upstream executor. It reports whether the choice was dropped,
+// so the caller does not refill the slot with a default.
+func normalizeOpenCodeV2ToolChoice(request map[string]any, flat, forceAutoChoice bool, validNames map[string]bool) bool {
+	switch choice := request["tool_choice"].(type) {
+	case string:
+		if choice == "none" {
+			request["tool_choice"] = "auto"
+		}
+	case map[string]any:
+		switch choice["type"] {
+		case "auto", "any", "none":
+			request["tool_choice"] = "auto"
+		case "function", "tool":
+			if forceAutoChoice {
+				request["tool_choice"] = "auto"
+				return false
+			}
+			name, _ := choice["name"].(string)
+			if fn, ok := choice["function"].(map[string]any); ok {
+				if n, _ := fn["name"].(string); name == "" {
+					name = n
+				}
+			}
+			if flat && !validNames[strings.TrimSpace(name)] {
+				delete(request, "tool_choice")
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func openCodeV2Parameters(name string) string {
@@ -118,7 +301,7 @@ func openCodeV2Tool(name string, flat bool) (map[string]any, error) {
 		description = openCodeShellDescription
 	}
 	if flat {
-		return map[string]any{"type": "function", "name": name, "description": description, "parameters": schema, "strict": false}, nil
+		return map[string]any{"type": "function", "name": name, "description": description, "parameters": schema}, nil
 	}
 	return map[string]any{"type": "function", "function": map[string]any{"name": name, "description": description, "parameters": schema}}, nil
 }

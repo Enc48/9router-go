@@ -360,13 +360,13 @@ var KnownProviders = map[string]ProviderConfig{
 		AuthScheme: "bearer",
 	},
 	"opencode": {
-		BaseURL:       "https://opencode.ai/zen/v1/chat/completions",
+		BaseURL:       "https://opencode.ai/inference/v1/chat/completions",
 		AuthHeader:    "Authorization",
 		AuthScheme:    "bearer",
 		DefaultAPIKey: "public",
 		NoAuth:        true,
 		SystemoneURL:  "https://opencode.ai/zen/v1/systemone",
-		StaticHeaders: map[string]string{"x-opencode-client": "desktop", "User-Agent": "opencode/1.18.31"},
+		StaticHeaders: map[string]string{"x-opencode-client": "desktop", "User-Agent": "opencode/latest/2.0.29/cli"},
 	},
 	// Pay-as-you-go lane (upstream open-sse/providers/registry/opencode-zen.js):
 	// a key is required, and the same key answers /chat/completions, /messages
@@ -380,7 +380,7 @@ var KnownProviders = map[string]ProviderConfig{
 		SystemoneURL: "https://opencode.ai/zen/v1/systemone",
 		StaticHeaders: map[string]string{
 			"x-opencode-client": "desktop",
-			"User-Agent":        "opencode/1.18.31",
+			"User-Agent":        "opencode/latest/2.0.29/cli",
 		},
 	},
 	"gemini": {
@@ -699,7 +699,7 @@ var KnownProviders = map[string]ProviderConfig{
 		AuthScheme: "bearer",
 		Format:     "claude",
 		StaticHeaders: map[string]string{
-			"User-Agent":      "MiniMaxAgent",
+			"User-Agent":       "MiniMaxAgent",
 			"X-Mavis-Agent-Id": "main",
 			// MiniMax requires the anthropic-version header on its Messages
 			// endpoint; the bearer carries the real credential.
@@ -712,8 +712,8 @@ var KnownProviders = map[string]ProviderConfig{
 		AuthScheme: "bearer",
 		Format:     "claude",
 		StaticHeaders: map[string]string{
-			"User-Agent":      "MiniMaxAgent",
-			"X-Mavis-Agent-Id": "main",
+			"User-Agent":        "MiniMaxAgent",
+			"X-Mavis-Agent-Id":  "main",
 			"anthropic-version": "2023-06-01",
 		},
 	},

@@ -14,7 +14,7 @@ import (
 const (
 	// DefaultOpenCodeUA is the official OpenCode fingerprint User-Agent.
 	// OpenCode v2 fingerprint required by the free-tier /inference/v1 API.
-	DefaultOpenCodeUA = "opencode/latest/2.0.26/cli"
+	DefaultOpenCodeUA = "opencode/latest/2.0.29/cli"
 
 	base62Chars = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 )

@@ -110,6 +110,83 @@ func TestForwardOpencode(t *testing.T) {
 	}
 }
 
+// A harness body — Claude-Code-style capitalised tools, a forced tool_choice,
+// a tool without a schema, and a foreign cache_control key — is canonicalized
+// into exactly what the v2 inference gate accepts, so the same model works
+// whether the caller is a clean API client or an agent harness
+// (decolua/9router#4842 gate rules).
+func TestForwardOpencode_HarnessBodyIsCanonicalizedForTheGate(t *testing.T) {
+	var sent map[string]any
+	var sentRaw string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		sentRaw = string(raw)
+		_ = json.Unmarshal(raw, &sent)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`data: {"id":"c1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"ok"}}]}` + "\n\ndata: [DONE]\n\n"))
+	}))
+	defer srv.Close()
+
+	cfg := &providers.ProviderConfig{
+		BaseURL: srv.URL + "/zen/v1/chat/completions",
+	}
+
+	rec := httptest.NewRecorder()
+	req := &Request{
+		Client: srv.Client(),
+		Config: cfg,
+		APIKey: "",
+		Body: []byte(`{"model":"deepseek-v4-flash-free","messages":[{"role":"user","content":"hi"}],` +
+			`"tools":[{"type":"function","function":{"name":"Read","description":"caller Read"}},` +
+			`{"type":"function","function":{"name":"Task","description":"t","parameters":{"type":"object","properties":{"path":{"type":"string"}},"cache_control":{"type":"ephemeral"}}}}],` +
+			`"tool_choice":{"type":"function","function":{"name":"Task"}},"parallel_tool_calls":false}`),
+		IsStream:      false,
+		TranslateResp: false,
+	}
+
+	if err := ForwardOpencode(rec, req); err != nil {
+		t.Fatalf("ForwardOpencode failed: %v", err)
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if sent == nil {
+		t.Fatal("upstream received no body")
+	}
+	tools, _ := sent["tools"].([]any)
+	if len(tools) != 4 {
+		t.Fatalf("want caller Read+Task plus injected read+shell, got %d: %s", len(tools), sentRaw)
+	}
+	names := map[string]bool{}
+	for _, tool := range tools {
+		tm, _ := tool.(map[string]any)
+		fn, _ := tm["function"].(map[string]any)
+		if fn == nil {
+			t.Errorf("chat lane lost the .function wrapper: %s", sentRaw)
+			continue
+		}
+		name, _ := fn["name"].(string)
+		names[name] = true
+		params, _ := fn["parameters"].(map[string]any)
+		if params == nil || params["type"] != "object" {
+			t.Errorf("tool %q reached the gate without an object schema: %s", name, sentRaw)
+		}
+	}
+	for _, want := range []string{"Read", "Task", "read", "shell"} {
+		if !names[want] {
+			t.Errorf("tool %q missing from the gate request: %s", want, sentRaw)
+		}
+	}
+	choice, ok := sent["tool_choice"].(map[string]any)
+	if !ok {
+		t.Fatalf("forced tool_choice must survive on the chat lane, got %v: %s", sent["tool_choice"], sentRaw)
+	}
+	if fn, _ := choice["function"].(map[string]any); fn["name"] != "Task" {
+		t.Errorf("forced choice name=%v, want Task: %s", fn["name"], sentRaw)
+	}
+}
+
 func TestForwardOpencode_MuseSpark_EdgeRelay(t *testing.T) {
 	var gotTarget, gotPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -189,8 +266,8 @@ func TestForwardOpencodeGo_OpenAIRouting(t *testing.T) {
 
 func TestForwardOpencode_MuseSparkResponsesRouting(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasSuffix(r.URL.Path, "/zen/v1/responses") {
-			t.Errorf("expected custom upstream path to be retained, got %s", r.URL.Path)
+		if !strings.HasSuffix(r.URL.Path, "/inference/v1/responses") {
+			t.Errorf("expected the zen base to be rewritten to the inference gate, got %s", r.URL.Path)
 		}
 		body, _ := io.ReadAll(r.Body)
 		var parsed map[string]any
@@ -265,8 +342,10 @@ func TestOpenCodeInferenceBase(t *testing.T) {
 	tests := []struct{ input, want string }{
 		{"https://opencode.ai/zen/v1/chat/completions", "https://opencode.ai/inference/v1"},
 		{"https://opencode.ai/zen/v1", "https://opencode.ai/inference/v1"},
+		{"http://127.0.0.1:9000/zen/v1/chat/completions", "http://127.0.0.1:9000/inference/v1"},
 		{"http://127.0.0.1:9000", "http://127.0.0.1:9000"},
 		{"https://relay.example/api", "https://relay.example/api"},
+		{"https://opencode.ai/inference/v1", "https://opencode.ai/inference/v1"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {

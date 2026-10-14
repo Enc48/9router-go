@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
 	"runtime"
 	"strconv"
@@ -601,7 +600,7 @@ func ForwardOpencode(w http.ResponseWriter, req *Request) error {
 		// The free-tier gate fingerprints the lowercase tool quartet; capitalised
 		// variants from Claude Code CLI are renamed here and restored on the
 		// response (translator.ConcealFingerprintTools).
-		transformedBody, toolNameMap := translator.ConcealOpenCodeV2FingerprintTools(transformedBody, true)
+		transformedBody, toolNameMap := translator.ConcealOpenCodeV2FingerprintTools(transformedBody, true, isOpenCodeAutoToolChoiceModel(cleanModel))
 		req.Ctx = translator.WithToolNameMap(req.Ctx, toolNameMap)
 		w = NewToolNameRestoringWriter(w, toolNameMap)
 
@@ -615,13 +614,10 @@ func ForwardOpencode(w http.ResponseWriter, req *Request) error {
 				cfg.StaticHeaders[k] = v
 			}
 			cfg.StaticHeaders["x-relay-path"] = "/inference/v1/responses"
-		} else if isOpenCodeOrigin(cfg.BaseURL) {
+		} else {
 			baseURL := strings.TrimRight(cfg.BaseURL, "/")
 			baseURL = strings.TrimSuffix(baseURL, "/chat/completions")
 			cfg.BaseURL = opencodeInferenceBase(baseURL) + "/responses"
-		} else if !strings.HasSuffix(cfg.BaseURL, "/responses") {
-			baseURL := strings.TrimSuffix(strings.TrimRight(cfg.BaseURL, "/"), "/chat/completions")
-			cfg.BaseURL = baseURL + "/responses"
 		}
 		cfg.StaticHeaders = proxy.BuildOpenCodeHeaders(cfg.StaticHeaders, req.SessionID, req.IsStream)
 		ctx := req.Ctx
@@ -649,7 +645,7 @@ func ForwardOpencode(w http.ResponseWriter, req *Request) error {
 
 	body := InjectReasoningContent(req.Body, "opencode")
 	// opencode Chat Completions path: same conceal + restore of tool names.
-	body, toolNameMap := translator.ConcealOpenCodeV2FingerprintTools(body, false)
+	body, toolNameMap := translator.ConcealOpenCodeV2FingerprintTools(body, false, isOpenCodeAutoToolChoiceModel(cleanModel))
 	req.Ctx = translator.WithToolNameMap(req.Ctx, toolNameMap)
 	w = NewToolNameRestoringWriter(w, toolNameMap)
 
@@ -701,29 +697,65 @@ func ForwardOpencode(w http.ResponseWriter, req *Request) error {
 	return jsonResponse(req.Ctx, w, bytes.NewReader(data), req.TranslateResp, req.ResponseBuf)
 }
 
-// opencodeInferenceBase rewrites only the OpenCode free-tier API prefix;
-// custom test and relay hosts retain their configured origin/path.
+// opencodeInferenceBase rewrites a zen-layout base URL to the v2 inference
+// gate's /inference/v1 prefix. Any host mirroring the zen layout follows the
+// same migration, so the rewrite keys off the prefix rather than the host. A
+// base with no zen prefix — a custom endpoint, or the registry default that
+// already points at /inference/v1 — is returned untouched.
 func opencodeInferenceBase(base string) string {
 	base = strings.TrimRight(base, "/")
-	if !isOpenCodeOrigin(base) {
+	base = strings.TrimSuffix(base, "/chat/completions")
+	base = strings.TrimSuffix(base, "/messages")
+	base = strings.TrimSuffix(base, "/responses")
+	switch {
+	case strings.HasSuffix(base, "/zen/v1"):
+		return strings.TrimSuffix(base, "/zen/v1") + "/inference/v1"
+	case strings.HasSuffix(base, "/inference/v1"):
+		return base
+	default:
 		return base
 	}
-	base = strings.TrimSuffix(base, "/chat/completions")
-	base = strings.TrimSuffix(base, "/zen/v1")
-	return base + "/inference/v1"
 }
 
 func opencodeChatURL(base string) string {
 	base = strings.TrimRight(base, "/")
-	if isOpenCodeOrigin(base) {
-		return opencodeInferenceBase(base) + "/chat/completions"
+	if !strings.HasSuffix(base, "/chat/completions") {
+		return base
+	}
+	trimmed := strings.TrimSuffix(base, "/chat/completions")
+	if strings.HasSuffix(trimmed, "/zen/v1") {
+		return strings.TrimSuffix(trimmed, "/zen/v1") + "/inference/v1/chat/completions"
 	}
 	return base
 }
 
-func isOpenCodeOrigin(rawURL string) bool {
-	parsed, err := url.Parse(rawURL)
-	return err == nil && parsed.Hostname() == "opencode.ai"
+// isOpenCodeAutoToolChoiceModel ports the upstream forceAutoToolChoiceModels
+// quirk (open-sse/executors/opencode.js): only models confirmed auto-only get
+// their explicit tool_choice rewritten, so the allowlist stays closed until a
+// model is probed.
+func isOpenCodeAutoToolChoiceModel(cleanModel string) bool {
+	return cleanModel == "muse-spark-1.3-contributor-free"
+}
+
+// isOpencodeFreeModel reports whether a bare model id belongs to the OpenCode
+// free tier, whose requests moved off /zen/v1 to the v2 inference gate
+// (decolua/9router#4842). The source of truth is the curated registry —
+// the free zen ids all live in providers.ProviderModelFormats — so the
+// classification stays catalog-driven rather than suffix matching.
+func isOpencodeFreeModel(cleanModel string) bool {
+	base := cleanModel
+	if parenIdx := strings.IndexByte(base, '('); parenIdx != -1 {
+		base = base[:parenIdx]
+	}
+	for _, provider := range []string{"opencode", "opencode-zen"} {
+		if _, declared := providers.GetModelFormats(provider, base); !declared {
+			continue
+		}
+		if providers.IsOpencodeFreeTierModel(provider, base) {
+			return true
+		}
+	}
+	return false
 }
 
 var opencodeGoMessagesModels = map[string]bool{

@@ -23,11 +23,16 @@ answers 403 FreeTierError.
   never on Claude-shaped bodies. tool_choice passes through untouched except
   on the Responses lane, where auto-only models collapse to "auto" and a
   forced choice naming no declared tool is dropped.
-- Paid lanes are deliberately untouched: opencode-zen stays on /zen/v1 with
-  the v1 identity and quartet cloaking, and opencode-go keeps its predicate,
-  v1 UA and request ids. Upstream #4842 leaves every keyed executor as-is,
-  so keyed requests (including free ids on zen connections) are never
-  rerouted to the keyless gate.
+- Paid lanes are deliberately narrow: opencode-zen keeps /zen/v1 with the v1
+  identity and quartet cloaking for paid ids, and opencode-go keeps its
+  predicate, v1 UA and request ids. Only curated free-tier ids move:
+  keyed requests for them 403 ("free tier can only be used from within
+  OpenCode", probed live on muse-spark-1.3-contributor-free), so zen and go
+  forward those to the keyless gate with public credentials, v2 cli identity
+  and the exact fingerprint. big-pickle stays on zen (no live 403 evidence;
+  the lane table carries it as paid chat). With no go connection configured,
+  the paid go lane borrows the key from an active opencode-zen connection
+  (key only — provider, BaseURL and lanes stay go), operator-requested.
 
 Verified with `go test -count=1 ./internal/proxy/ ./internal/proxy/executor/
 ./internal/translator/ ./internal/providers/ ./internal/handlers/chat/`:

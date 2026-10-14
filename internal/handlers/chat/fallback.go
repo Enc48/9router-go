@@ -29,6 +29,27 @@ import (
 // StatusClientClosedRequest is the canonical HTTP status for client connection aborts (nginx 499).
 const StatusClientClosedRequest = 499
 
+// borrowZenKeyForGo returns the identity and key of an active opencode-zen
+// connection for the paid go lane, which shares the same backend account.
+// Only used when no go connection exists at all; resolution goes through the
+// standard connection path so health, stickiness and token refresh apply.
+func (h *ChatHandler) borrowZenKeyForGo(ctx context.Context, model string) (connID, connName, connEmail, apiKey string, err error) {
+	zenConns, err := h.Repo.GetProviderConnections("opencode-zen", true)
+	if err != nil {
+		return "", "", "", "", err
+	}
+	for _, c := range zenConns {
+		connObj, connData, err := h.getBestConnectionWithContext(ctx, "opencode-zen", c.ID, nil, model)
+		if err != nil || connObj == nil || connData == nil {
+			continue
+		}
+		if apiKey := extractAPIKey(connData); apiKey != "" {
+			return connObj.ID, connObjName(connObj), connObjEmail(connObj), apiKey, nil
+		}
+	}
+	return "", "", "", "", fmt.Errorf("no active opencode-zen connection with an API key")
+}
+
 // handleAccountFallback attempts to forward a request with automatic account fallback.
 func (h *ChatHandler) handleAccountFallback(
 	ctx context.Context,
@@ -65,6 +86,23 @@ func (h *ChatHandler) handleAccountFallback(
 
 	allConns, err := h.Repo.GetProviderConnections(provider, true)
 	if err != nil || len(allConns) == 0 {
+		// opencode-go shares its backend account with opencode-zen: with no
+		// go connection configured, borrow the key from an active zen
+		// connection (key only — provider, BaseURL and lanes stay go).
+		// Operator-requested; the borrow is logged so it stays visible.
+		if provider == "opencode-go" {
+			if connID, connName, connEmail, apiKey, bErr := h.borrowZenKeyForGo(ctx, model); bErr == nil {
+				log.Warn("fallback", "opencode-go has no connection, borrowing opencode-zen key", "conn", connID)
+				return h.tryForwardWithConnection(forwardRequestParams{
+					Ctx: ctx, W: w, Provider: provider, Model: model,
+					ConnectionID: connID, ConnName: connName, ConnEmail: connEmail,
+					ConnData: &ConnectionData{APIKey: apiKey, ProxyPoolID: h.ResolveProviderProxyPoolID(provider)}, Body: body,
+					IsStream: isStream, TranslateResponse: translateResponse, Endpoint: endpoint,
+				})
+			} else {
+				log.Debug("fallback", "no zen key to borrow for opencode-go", "error", bErr)
+			}
+		}
 		if cfg, ok := providers.KnownProviders[provider]; ok && (cfg.NoAuth || cfg.DefaultAPIKey != "") {
 			apiKey := cfg.DefaultAPIKey
 			if apiKey == "" {

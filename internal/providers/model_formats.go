@@ -245,6 +245,46 @@ func openCodeFamilyFormatsFor(base string) *ModelFormats {
 	return nil
 }
 
+// openCodeFreeTierModels lists the curated free-tier ids. Live upstream
+// behavior (403 "free tier can only be used from within OpenCode" for keyed
+// /zen/v1 requests) plus the upstream free-executor routing show these ids
+// answer behind the keyless /inference/v1 gate, so the keyed zen lane
+// forwards them there with public credentials instead of the user key.
+// big-pickle is deliberately absent: it has no live 403 evidence and the lane
+// table carries it as paid chat, so moving it could break working calls.
+var openCodeFreeTierModels = map[string]bool{
+	// opencode (free provider)
+	"muse-spark-1.2-contributor-free": true,
+	"muse-spark-1.3-contributor-free": true,
+	"jev-1.13-free":                   true,
+	// opencode-zen free tier on the keyed lane
+	"deepseek-v4-flash-free":      true,
+	"mimo-v2.6-flash-free":        true,
+	"mimo-v2.5-free":              true,
+	"ling-3.0-flash-fin-free":     true,
+	"nemotron-3-ultra-free":       true,
+	"nemotron-3.5-lightning-free": true,
+	// opencode-go free tier on the paid lane
+	"space-bunny-free": true,
+}
+
+// IsOpencodeFreeTierModel reports whether a bare model id is one of the
+// OpenCode free-tier ids, so executors can pick the /inference/v1 prefix.
+// The model must also be curated for the named provider; an id that only
+// exists on the free provider is not a zen free model and vice versa.
+func IsOpencodeFreeTierModel(provider, baseModelID string) bool {
+	if !openCodeFreeTierModels[baseModelID] {
+		return false
+	}
+	models := ProviderModels[provider]
+	for _, m := range models {
+		if m == baseModelID {
+			return true
+		}
+	}
+	return false
+}
+
 // SupportsFormat reports whether the model serves a client format directly.
 func (m ModelFormats) SupportsFormat(format string) bool {
 	for _, f := range m.SupportedFormats {

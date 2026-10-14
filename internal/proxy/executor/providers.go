@@ -737,6 +737,27 @@ func isOpenCodeAutoToolChoiceModel(cleanModel string) bool {
 	return cleanModel == "muse-spark-1.3-contributor-free"
 }
 
+// isOpencodeFreeModel reports whether a bare model id belongs to the OpenCode
+// free tier. Keyed zen requests for these ids answer 403 ("free tier can only
+// be used from within OpenCode"), so the zen lane forwards them to the
+// keyless /inference/v1 gate with public credentials. The source of truth is
+// the curated registry (providers.IsOpencodeFreeTierModel) — never suffix
+// matching.
+func isOpencodeFreeModel(cleanModel string) bool {
+	base := cleanModel
+	if parenIdx := strings.IndexByte(base, '('); parenIdx != -1 {
+		base = base[:parenIdx]
+	}
+	// IsOpencodeFreeTierModel already requires catalog membership, so this
+	// stays catalog-driven across all three lanes (free, zen, go).
+	for _, provider := range []string{"opencode", "opencode-zen", "opencode-go"} {
+		if providers.IsOpencodeFreeTierModel(provider, base) {
+			return true
+		}
+	}
+	return false
+}
+
 var opencodeGoMessagesModels = map[string]bool{
 	"minimax-m3":    true,
 	"minimax-m2.7":  true,
@@ -1273,6 +1294,83 @@ func normalizeMuseSparkResponsesBody(body []byte, cleanModel string) ([]byte, er
 }
 
 // ForwardOpencodeGo handles requests for opencode-go (paid tier).
+// opencodeGoInferenceBase rewrites a go-layout base URL to the v2 inference
+// gate's /inference/v1 prefix, mirroring opencodeInferenceBase for the
+// /zen/go/v1 layout. Custom endpoints pass through untouched.
+func opencodeGoInferenceBase(base string) string {
+	base = strings.TrimRight(base, "/")
+	base = strings.TrimSuffix(base, "/chat/completions")
+	base = strings.TrimSuffix(base, "/messages")
+	base = strings.TrimSuffix(base, "/responses")
+	switch {
+	case strings.HasSuffix(base, "/zen/go/v1"):
+		return strings.TrimSuffix(base, "/zen/go/v1") + "/inference/v1"
+	case strings.HasSuffix(base, "/inference/v1"):
+		return base
+	default:
+		return base
+	}
+}
+
+// forwardOpencodeGoFree serves free-tier ids on the paid go lane (today only
+// space-bunny-free). Keyed requests for them 403, so they travel exactly like
+// free-executor requests: the inference chat lane (no free go model takes the
+// Responses lane upstream), v2 fingerprint, public credentials.
+func forwardOpencodeGoFree(w http.ResponseWriter, req *Request, cleanModel string) error {
+	body := InjectReasoningContent(req.Body, "opencode-go")
+	body, toolNameMap := translator.ConcealOpenCodeV2FingerprintTools(body, false, isOpenCodeAutoToolChoiceModel(cleanModel))
+	req.Ctx = translator.WithToolNameMap(req.Ctx, toolNameMap)
+	w = NewToolNameRestoringWriter(w, toolNameMap)
+
+	var reqMap map[string]any
+	if err := json.Unmarshal(body, &reqMap); err == nil {
+		reqMap["stream"] = true
+		if cleanModel != "" {
+			reqMap["model"] = cleanModel
+		}
+		if b, err := marshalStable(reqMap); err == nil {
+			body = b
+		}
+	}
+
+	cfg := *req.Config
+	if isRelayConfig(&cfg) {
+		cfg.StaticHeaders = copyHeaders(cfg.StaticHeaders)
+		cfg.StaticHeaders["x-relay-path"] = "/inference/v1/chat/completions"
+		cfg.BaseURL = strings.TrimRight(cfg.BaseURL, "/") + "/chat/completions"
+	} else {
+		cfg.BaseURL = opencodeGoInferenceBase(cfg.BaseURL) + "/chat/completions"
+	}
+	cfg.StaticHeaders = proxy.BuildOpenCodeHeaders(cfg.StaticHeaders, req.SessionID, true)
+
+	ctx := req.Ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	resp, err := proxy.ForwardOpenAI(ctx, req.Client, &cfg, "public", body, true)
+	if err != nil {
+		return fmt.Errorf("ForwardOpencodeGo (free lane): %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1*1024*1024))
+		return &proxy.UpstreamError{StatusCode: resp.StatusCode, Body: errBody}
+	}
+
+	if req.IsStream {
+		return execSSEStream(w, resp.Body, req)
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024))
+	if err != nil {
+		return fmt.Errorf("read opencode-go free response: %w", err)
+	}
+	if converted, ok := sseToOpenAIJSON(data); ok {
+		data = converted
+	}
+	return jsonResponse(req.Ctx, w, bytes.NewReader(data), req.TranslateResp, req.ResponseBuf)
+}
+
 func ForwardOpencodeGo(w http.ResponseWriter, req *Request) error {
 	body := InjectReasoningContent(req.Body, "opencode-go")
 
@@ -1290,6 +1388,12 @@ func ForwardOpencodeGo(w http.ResponseWriter, req *Request) error {
 	cleanModel = strings.TrimPrefix(cleanModel, "opencode/")
 	if parenIdx := strings.IndexByte(cleanModel, '('); parenIdx != -1 {
 		cleanModel = cleanModel[:parenIdx]
+	}
+
+	// Free-tier ids 403 on the keyed go lane just like on zen, so they take
+	// the keyless inference gate with public credentials (see zen).
+	if isOpencodeFreeModel(cleanModel) {
+		return forwardOpencodeGoFree(w, req, cleanModel)
 	}
 
 	if isOpencodeGoResponsesModel(cleanModel) {

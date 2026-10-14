@@ -445,6 +445,51 @@ func TestForwardOpencodeGo_MuseSparkResponsesRouting(t *testing.T) {
 	}
 }
 
+// space-bunny-free 403s on the keyed go lane, so it takes the keyless
+// inference chat lane with public credentials — never the user's go key.
+func TestForwardOpencodeGo_SpaceBunnyFreeTakesInferenceGate(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/inference/v1/chat/completions") {
+			t.Errorf("expected inference chat lane, got %s", r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer public" {
+			t.Errorf("expected Bearer public, got %s", r.Header.Get("Authorization"))
+		}
+		if r.Header.Get("User-Agent") != proxy.DefaultOpenCodeUA {
+			t.Errorf("expected v2 User-Agent %s, got %s", proxy.DefaultOpenCodeUA, r.Header.Get("User-Agent"))
+		}
+		if r.Header.Get("x-opencode-client") != "cli" {
+			t.Errorf("expected cli client header, got %s", r.Header.Get("x-opencode-client"))
+		}
+		body, _ := io.ReadAll(r.Body)
+		var parsed map[string]any
+		if err := json.Unmarshal(body, &parsed); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if parsed["model"] != "space-bunny-free" {
+			t.Errorf("expected bare model id, got %v", parsed["model"])
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`data: {"id":"c1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"bunny"}}]}` + "\n\ndata: [DONE]\n\n"))
+	}))
+	defer srv.Close()
+
+	cfg := &providers.ProviderConfig{BaseURL: srv.URL + "/zen/go/v1/chat/completions"}
+	rec := httptest.NewRecorder()
+	req := &Request{
+		Client: srv.Client(), Config: cfg, APIKey: "secret-go-key",
+		Body:     []byte(`{"model":"opencode-go/space-bunny-free","messages":[{"role":"user","content":"hi"}]}`),
+		IsStream: false, TranslateResp: false,
+	}
+	if err := ForwardOpencodeGo(rec, req); err != nil {
+		t.Fatalf("ForwardOpencodeGo failed: %v", err)
+	}
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", rec.Code)
+	}
+}
+
 func TestForwardOpencode_MuseSpark_OCPrefix(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasSuffix(r.URL.Path, "/responses") {

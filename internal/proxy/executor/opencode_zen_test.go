@@ -326,11 +326,9 @@ func TestNormalizeZenResponsesBody_ReasoningShapes(t *testing.T) {
 	}
 }
 
-// The keyed zen lane stays on /zen/v1 with the v1 identity for every model —
-// including ids proposed for the inference gate elsewhere. Upstream
-// decolua/9router#4842 moves only the keyless free executor and leaves
-// opencode-zen (endpoints, UA, client, fingerprint) untouched, so a keyed
-// request must never be rerouted to the keyless gate.
+// Paid ids stay on the keyed /zen/v1 lane with the v1 identity — including
+// big-pickle, which has no live 403 evidence and the lane table carries as
+// paid chat, so it must not be swept into the inference gate.
 func TestForwardOpencodeZen_KeyedLaneStaysOnZenV1(t *testing.T) {
 	tests := []struct {
 		model string
@@ -338,8 +336,8 @@ func TestForwardOpencodeZen_KeyedLaneStaysOnZenV1(t *testing.T) {
 		reply func(w http.ResponseWriter)
 	}{
 		{"big-pickle", "/zen/v1/chat/completions", zenChatReply},
-		{"deepseek-v4-flash-free", "/zen/v1/chat/completions", zenChatReply},
-		{"muse-spark-1.3-contributor-free", "/zen/v1/responses", zenResponsesReply},
+		{"deepseek-v4-pro", "/zen/v1/chat/completions", zenChatReply},
+		{"grok-4.6", "/zen/v1/responses", zenResponsesReply},
 	}
 	for _, tt := range tests {
 		t.Run(tt.model, func(t *testing.T) {
@@ -380,6 +378,66 @@ func TestForwardOpencodeZen_KeyedLaneStaysOnZenV1(t *testing.T) {
 			}
 			if client != "desktop" {
 				t.Errorf("model %q sent x-opencode-client %q, want desktop", tt.model, client)
+			}
+		})
+	}
+}
+
+// Free-tier ids 403 on the keyed lane ("free tier can only be used from within
+// OpenCode", probed live), so they travel exactly like free-executor requests:
+// inference endpoint, Bearer public, v2 cli identity and fingerprint.
+func TestForwardOpencodeZen_FreeModelTakesInferenceGate(t *testing.T) {
+	tests := []struct {
+		model string
+		want  string
+		reply func(w http.ResponseWriter)
+	}{
+		{"deepseek-v4-flash-free", "/inference/v1/chat/completions", zenChatReply},
+		{"muse-spark-1.3-contributor-free", "/inference/v1/responses", zenResponsesReply},
+	}
+	for _, tt := range tests {
+		t.Run(tt.model, func(t *testing.T) {
+			var path, auth, ua, client string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				path = r.URL.Path
+				auth = r.Header.Get("Authorization")
+				ua = r.Header.Get("User-Agent")
+				client = r.Header.Get("x-opencode-client")
+				tt.reply(w)
+			}))
+			defer srv.Close()
+			rec := httptest.NewRecorder()
+			req := &Request{
+				Ctx:    context.Background(),
+				Client: srv.Client(),
+				Config: &providers.ProviderConfig{
+					BaseURL:    srv.URL + "/zen/v1/chat/completions",
+					AuthHeader: "Authorization",
+					AuthScheme: "bearer",
+					StaticHeaders: map[string]string{
+						"x-opencode-client": "desktop",
+						"User-Agent":        "opencode/1.18.31",
+					},
+				},
+				APIKey:        "sk-zen",
+				Body:          []byte(`{"model":"` + tt.model + `","messages":[{"role":"user","content":"hi"}],"stream":true}`),
+				IsStream:      true,
+				TranslateResp: false,
+			}
+			if err := ForwardOpencodeZen(rec, req); err != nil {
+				t.Fatalf("ForwardOpencodeZen: %v", err)
+			}
+			if path != tt.want {
+				t.Errorf("model %q reached %q, want the inference gate %q", tt.model, path, tt.want)
+			}
+			if auth != "Bearer public" {
+				t.Errorf("model %q sent %q, want the public credential the gate expects", tt.model, auth)
+			}
+			if ua != proxy.DefaultOpenCodeUA {
+				t.Errorf("model %q sent User-Agent %q, want the v2 identity %q", tt.model, ua, proxy.DefaultOpenCodeUA)
+			}
+			if client != "cli" {
+				t.Errorf("model %q sent x-opencode-client %q, want cli", tt.model, client)
 			}
 		})
 	}

@@ -2231,7 +2231,7 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "color": "#4D6BFE",
     "icon": "auto_awesome",
     "website": "https://chat.deepseek.com",
-    "authType": "apikey",
+    "authType": "cookie",
     "authHint": "Paste your userToken from chat.deepseek.com — DevTools → Application → Local Storage → userToken",
     "noAuth": false,
     "serviceKinds": [

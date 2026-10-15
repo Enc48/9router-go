@@ -1,5 +1,37 @@
 # Changelog
 
+## [v1.9.13] - 2026-10-15
+
+### OpenCode: append the exact fingerprint even when caller tools collide
+
+Follow-up to #320, root-caused live: a TUI-shaped body whose `read`/`shell`
+tools carry non-CLI definitions got its tools aliased (`read_client`, ...)
+but no exact `read`/`shell` declaration traveled, and the gate answered 403
+"free tier can only be used from within OpenCode" — reproduced against the
+real gate (403 before, 200 after, same body).
+
+- The append check now runs on post-alias names like upstream's
+  `appendMissingFingerprintTools`, instead of the pre-alias seen set.
+- Pinned with `TestConcealOpenCodeV2CollidingNamesStillAppendExact`
+  (order `read_client2,read_client,Edit,read,shell`, both lanes).
+
+Verified with `go test -count=1 ./internal/translator/ ./internal/proxy/
+/internal/proxy/executor/ ./internal/handlers/chat/` and two live gate
+probes (minimal + colliding-tools bodies, cli and desktop identities).
+
+### 📊 fix(usage): fix column label precedence in UsageBreakdownTable and aggregate byEndpoint
+
+- **Background**: In Usage Breakdown, switching to `Usage by Account` or `Usage by API Key`
+  consistently displayed the model ID rather than the account display name or API key name,
+  because `row.rawModel` was evaluated first in the fallback expression. Additionally,
+  `Usage by Endpoint` was always empty because `HandleUsageStats` never aggregated the
+  `byEndpoint` data.
+- **Frontend**: Explicitly checked `tableView` in `UsageBreakdownTable.svelte` to render
+  `row.accountName` for accounts, `row.keyName` / `row.apiKeyMasked` for API keys, and
+  `row.endpoint` for endpoints.
+- **Backend**: Added `byEndpoint` parsing in `HandleUsageStats` daily rollup and `usage_window_cache.go`.
+
+
 ## [v1.9.12] - 2026-10-15
 
 ### Fixed

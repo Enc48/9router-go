@@ -415,6 +415,10 @@ func validateProviderKey(ctx context.Context, provider string, cfg providers.Pro
 		return validateGrokWeb(ctx, apiKey)
 	case "perplexity-web":
 		return validatePerplexityWeb(ctx, apiKey)
+	case "deepseek-web":
+		return validateDeepSeekWeb(ctx, apiKey)
+	case "gemini-web":
+		return validateGeminiWeb(ctx, apiKey)
 	case "qoder", "qoder-cn":
 		return validateQoder(ctx, provider, apiKey, psd)
 	case "v1m":

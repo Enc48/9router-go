@@ -2224,6 +2224,36 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     ]
   },
   {
+    "id": "deepseek-web",
+    "name": "DeepSeek Web (Free)",
+    "category": "webCookie",
+    "alias": "ds-web",
+    "color": "#4D6BFE",
+    "icon": "auto_awesome",
+    "website": "https://chat.deepseek.com",
+    "authType": "apikey",
+    "authHint": "Paste your userToken from chat.deepseek.com — DevTools → Application → Local Storage → userToken",
+    "noAuth": false,
+    "serviceKinds": [
+      "llm"
+    ]
+  },
+  {
+    "id": "gemini-web",
+    "name": "Gemini Web (Free)",
+    "category": "webCookie",
+    "alias": "gweb",
+    "color": "#4285F4",
+    "icon": "auto_awesome",
+    "website": "https://gemini.google.com",
+    "authType": "cookie",
+    "authHint": "Paste the full cookie header, the __Secure-1PSID value, or a JSON cookie export from gemini.google.com. Not routable in this build: it needs a real browser, which the Go binary does not ship.",
+    "noAuth": false,
+    "serviceKinds": [
+      "llm"
+    ]
+  },
+  {
     "id": "selfhosted-tts",
     "name": "Self-Hosted TTS",
     "category": "apikey",

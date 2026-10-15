@@ -55,6 +55,7 @@ export const PROVIDER_ID_TO_ALIAS: Record<string, string> = {
   "cursor": "cu",
   "deepgram": "dg",
   "deepseek": "ds",
+  "deepseek-web": "ds-web",
   "devin-cli": "devin-cli",
   "elevenlabs": "elevenlabs",
   "fal-ai": "fal",
@@ -64,6 +65,7 @@ export const PROVIDER_ID_TO_ALIAS: Record<string, string> = {
   "freebuff": "fb",
   "gemini": "gemini",
   "gemini-cli": "gc",
+  "gemini-web": "gweb",
   "github": "gh",
   "gitlab": "gitlab",
   "glm": "glm",
@@ -1728,6 +1730,64 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
       "name": "DeepSeek V3.2 Reasoner"
     }
   ],
+  "deepseek-web": [
+    {
+      "id": "deepseek-v4-pro",
+      "name": "DeepSeek V4 Pro"
+    },
+    {
+      "id": "deepseek-v4-pro-think",
+      "name": "DeepSeek V4 Pro Think"
+    },
+    {
+      "id": "deepseek-v4-pro-search",
+      "name": "DeepSeek V4 Pro Search"
+    },
+    {
+      "id": "deepseek-v4-pro-think-search",
+      "name": "DeepSeek V4 Pro Think+Search"
+    },
+    {
+      "id": "deepseek-v4-flash",
+      "name": "DeepSeek V4 Flash"
+    },
+    {
+      "id": "deepseek-v4-flash-think",
+      "name": "DeepSeek V4 Flash Think"
+    },
+    {
+      "id": "deepseek-v4-flash-search",
+      "name": "DeepSeek V4 Flash Search"
+    },
+    {
+      "id": "deepseek-v4-flash-think-search",
+      "name": "DeepSeek V4 Flash Think+Search"
+    },
+    {
+      "id": "deepseek-chat",
+      "name": "DeepSeek Chat"
+    },
+    {
+      "id": "deepseek-reasoner",
+      "name": "DeepSeek Reasoner"
+    },
+    {
+      "id": "DeepSeek-R1",
+      "name": "DeepSeek R1"
+    },
+    {
+      "id": "DeepSeek-R1-Search",
+      "name": "DeepSeek R1 Search"
+    },
+    {
+      "id": "DeepSeek-V3.2",
+      "name": "DeepSeek V3.2"
+    },
+    {
+      "id": "DeepSeek-Search",
+      "name": "DeepSeek Search"
+    }
+  ],
   "devin-cli": [
     {
       "id": "swe-1.6-fast",
@@ -2177,6 +2237,20 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
       "name": "Embedding 001",
       "dimensions": 768,
       "kind": "embedding"
+    }
+  ],
+  "gemini-web": [
+    {
+      "id": "gemini-3.1-pro",
+      "name": "Gemini 3.1 Pro"
+    },
+    {
+      "id": "gemini-3.7-flash",
+      "name": "Gemini 3.7 Flash"
+    },
+    {
+      "id": "gemini-3.1-flash-lite",
+      "name": "Gemini 3.1 Flash-Lite"
     }
   ],
   "gh": [

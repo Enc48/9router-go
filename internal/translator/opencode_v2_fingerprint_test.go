@@ -229,8 +229,7 @@ func TestConcealOpenCodeV2CanonicalizesHarnessShapes(t *testing.T) {
 		}
 	})
 
-	t.Run("an exact caller read definition is kept without aliasing", func(t *testing.T) {
-		tool, err := openCodeV2Tool("read", false)
+	t.Run("an exact caller read definition is kept without aliasing", func(t *testing.T) {		tool, err := openCodeV2Tool("read", false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -350,5 +349,50 @@ func TestConcealOpenCodeV2PlaceholderNoteShapes(t *testing.T) {
 		if m["role"] == "system" {
 			t.Errorf("Claude-shaped bodies must not gain a system note: %s", claudeOut)
 		}
+	}
+}
+
+// A caller tool reusing an exact fingerprint name with a different definition
+// is aliased AND the exact definition is still appended: the gate 403s when
+// no exact read/shell declaration travels (upstream appendMissingFingerprintTools
+// checks post-alias names, so the port must too).
+func TestConcealOpenCodeV2CollidingNamesStillAppendExact(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		flat bool
+	}{
+		{"chat", false},
+		{"responses", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := []byte(`{"tools":[{"type":"function","name":"read","description":"caller read"},{"type":"function","name":"read_client","description":"x"},{"type":"function","name":"Edit","description":"caller edit"}]}`)
+			out, names := ConcealOpenCodeV2FingerprintTools(body, tc.flat, false)
+			if names["read_client2"] != "read" {
+				t.Fatalf("alias map = %v, want read_client2 -> read", names)
+			}
+			var got map[string]any
+			if err := json.Unmarshal(out, &got); err != nil {
+				t.Fatal(err)
+			}
+			tools, _ := got["tools"].([]any)
+			var order []string
+			for _, tool := range tools {
+				m := tool.(map[string]any)
+				// Chat-lane tools keep whatever shape they arrived in (flat
+				// or nested), exactly like upstream's withToolName.
+				if name, ok := m["name"].(string); ok && name != "" {
+					order = append(order, name)
+				} else if fn, ok := m["function"].(map[string]any); ok {
+					name, _ := fn["name"].(string)
+					order = append(order, name)
+				} else {
+					t.Fatalf("tool lost its name: %v", m)
+				}
+			}
+			want := []string{"read_client2", "read_client", "Edit", "read", "shell"}
+			if strings.Join(order, ",") != strings.Join(want, ",") {
+				t.Errorf("tool order = %v, want %v: %s", order, want, out)
+			}
+		})
 	}
 }

@@ -3,11 +3,9 @@ package dashboard
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	json "encoding/json/v2"
 	"net/http"
 	"net/http/httptest"
-	"regexp"
 	"strings"
 	"testing"
 )
@@ -372,98 +370,6 @@ func TestHandleValidateProvider_ProbeFailureIsReportedAsInvalid(t *testing.T) {
 	}
 	if msg, _ := out["error"].(string); !strings.Contains(msg, "deadline exceeded") {
 		t.Errorf("expected probe error surfaced, got %v", out["error"])
-	}
-}
-
-// --- grok-web ---
-
-func TestHandleValidateProvider_GrokWebCookieProbe(t *testing.T) {
-	calls := staticProbeStub(t, http.StatusOK)
-
-	rec, out := postValidate(t, `{"provider":"grok-web","apiKey":"sso=sso-token-1"}`)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d (%s)", rec.Code, rec.Body.String())
-	}
-	if len(*calls) != 1 {
-		t.Fatalf("expected one probe, got %d", len(*calls))
-	}
-	probe := (*calls)[0]
-	if probe.method != http.MethodPost || probe.url != "https://grok.com/rest/app-chat/conversations/new" {
-		t.Errorf("unexpected probe %s %s", probe.method, probe.url)
-	}
-	// The `sso=` prefix must be stripped, not doubled.
-	if got := probe.headers.Get("Cookie"); got != "sso=sso-token-1" {
-		t.Errorf("unexpected cookie header %q", got)
-	}
-	wantStatsig := base64.StdEncoding.EncodeToString([]byte("e:TypeError: Cannot read properties of null (reading 'children')"))
-	if got := probe.headers.Get("x-statsig-id"); got != wantStatsig {
-		t.Errorf("unexpected x-statsig-id %q", got)
-	}
-	if got := probe.headers.Get("traceparent"); !regexp.MustCompile(`^00-[0-9a-f]{32}-[0-9a-f]{16}-00$`).MatchString(got) {
-		t.Errorf("unexpected traceparent %q", got)
-	}
-	if !strings.Contains(probe.body, `"modelMode":"MODEL_MODE_GROK_4"`) {
-		t.Errorf("probe body missing grok payload: %s", probe.body)
-	}
-	if out["valid"] != true {
-		t.Errorf("expected valid=true, got %v", out["valid"])
-	}
-}
-
-func TestHandleValidateProvider_GrokWebRejectsBadCookie(t *testing.T) {
-	staticProbeStub(t, http.StatusForbidden)
-
-	_, out := postValidate(t, `{"provider":"grok-web","apiKey":"raw-token"}`)
-	if out["valid"] != false {
-		t.Errorf("expected valid=false for 403, got %v", out["valid"])
-	}
-	msg, _ := out["error"].(string)
-	if !strings.Contains(msg, "Invalid SSO cookie") {
-		t.Errorf("expected SSO guidance, got %v", out["error"])
-	}
-}
-
-// --- perplexity-web ---
-
-func TestHandleValidateProvider_PerplexityWebSessionProbe(t *testing.T) {
-	calls := staticProbeStub(t, http.StatusTooManyRequests)
-
-	rec, out := postValidate(t, `{"provider":"perplexity-web","apiKey":"__Secure-next-auth.session-token=sess-1"}`)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d (%s)", rec.Code, rec.Body.String())
-	}
-	if len(*calls) != 1 {
-		t.Fatalf("expected one probe, got %d", len(*calls))
-	}
-	probe := (*calls)[0]
-	if probe.method != http.MethodPost || probe.url != "https://www.perplexity.ai/rest/sse/perplexity_ask" {
-		t.Errorf("unexpected probe %s %s", probe.method, probe.url)
-	}
-	if got := probe.headers.Get("Cookie"); got != "__Secure-next-auth.session-token=sess-1" {
-		t.Errorf("unexpected cookie header %q", got)
-	}
-	if got := probe.headers.Get("X-App-ApiVersion"); got != "2.18" {
-		t.Errorf("unexpected X-App-ApiVersion %q", got)
-	}
-	if !strings.Contains(probe.body, `"query_str":"ping"`) {
-		t.Errorf("probe body missing query: %s", probe.body)
-	}
-	// 429 means the cookie was accepted.
-	if out["valid"] != true {
-		t.Errorf("expected valid=true for 429, got %v (%v)", out["valid"], out["error"])
-	}
-}
-
-func TestHandleValidateProvider_PerplexityWebRejectsBadCookie(t *testing.T) {
-	staticProbeStub(t, http.StatusUnauthorized)
-
-	_, out := postValidate(t, `{"provider":"perplexity-web","apiKey":"sess-bad"}`)
-	if out["valid"] != false {
-		t.Errorf("expected valid=false for 401, got %v", out["valid"])
-	}
-	msg, _ := out["error"].(string)
-	if !strings.Contains(msg, "Invalid session cookie") {
-		t.Errorf("expected session cookie guidance, got %v", out["error"])
 	}
 }
 

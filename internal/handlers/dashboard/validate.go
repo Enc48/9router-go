@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	crand "crypto/rand"
-	"encoding/base64"
 	"encoding/hex"
 	json "encoding/json/v2"
 	"fmt"
@@ -12,8 +11,6 @@ import (
 	"net/http"
 	"strings"
 	"time"
-
-	"github.com/google/uuid"
 
 	"9router/proxy/internal/db"
 	"9router/proxy/internal/handlerutil"
@@ -411,14 +408,8 @@ func validateProviderKey(ctx context.Context, provider string, cfg providers.Pro
 		return validateOutcome{valid: status == http.StatusOK, supported: true}
 	case "xiaomi-tokenplan":
 		return validateXiaomiTokenplan(ctx, apiKey, psd)
-	case "grok-web":
-		return validateGrokWeb(ctx, apiKey)
-	case "perplexity-web":
-		return validatePerplexityWeb(ctx, apiKey)
 	case "deepseek-web":
 		return validateDeepSeekWeb(ctx, apiKey)
-	case "gemini-web":
-		return validateGeminiWeb(ctx, apiKey)
 	case "qoder", "qoder-cn":
 		return validateQoder(ctx, provider, apiKey, psd)
 	case "v1m":
@@ -643,128 +634,6 @@ func validateXiaomiTokenplan(ctx context.Context, apiKey string, psd map[string]
 	}
 	// /models answers 403 for valid keys without list permission — only 401 is fatal.
 	return validateOutcome{valid: status != http.StatusUnauthorized, supported: true}
-}
-
-// --- grok-web: SSO cookie probe (upstream `case "grok-web"`) ---
-
-const (
-	grokWebProbeURL = "https://grok.com/rest/app-chat/conversations/new"
-	grokWebUA       = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"
-)
-
-// GrokWebStatsigID is the fixed x-statsig-id grok.com expects from a browser
-// session (upstream base64s the same literal).
-var grokWebStatsigID = base64.StdEncoding.EncodeToString([]byte("e:TypeError: Cannot read properties of null (reading 'children')"))
-
-func validateGrokWeb(ctx context.Context, apiKey string) validateOutcome {
-	token := strings.TrimPrefix(strings.TrimSpace(apiKey), "sso=")
-
-	traceID := validateRandomHex(16)
-	spanID := validateRandomHex(8)
-	payload, _ := json.Marshal(map[string]any{
-		"temporary":                   true,
-		"modelName":                   "grok-4",
-		"modelMode":                   "MODEL_MODE_GROK_4",
-		"message":                     "ping",
-		"fileAttachments":             []any{},
-		"imageAttachments":            []any{},
-		"disableSearch":               false,
-		"enableImageGeneration":       false,
-		"returnImageBytes":            false,
-		"returnRawGrokInXaiRequest":   false,
-		"enableImageStreaming":        false,
-		"imageGenerationCount":        0,
-		"forceConcise":                false,
-		"toolOverrides":               map[string]any{},
-		"enableSideBySide":            true,
-		"sendFinalMetadata":           true,
-		"isReasoning":                 false,
-		"disableTextFollowUps":        true,
-		"disableMemory":               true,
-		"forceSideBySide":             false,
-		"isAsyncChat":                 false,
-		"disableSelfHarmShortCircuit": false,
-	})
-	headers := map[string]string{
-		"Accept":             "*/*",
-		"Accept-Encoding":    "gzip, deflate, br, zstd",
-		"Accept-Language":    "en-US,en;q=0.9",
-		"Cache-Control":      "no-cache",
-		"Content-Type":       "application/json",
-		"Cookie":             "sso=" + token,
-		"Origin":             "https://grok.com",
-		"Pragma":             "no-cache",
-		"Referer":            "https://grok.com/",
-		"Sec-Ch-Ua":          `"Google Chrome";v="136", "Chromium";v="136", "Not(A:Brand";v="24"`,
-		"Sec-Ch-Ua-Mobile":   "?0",
-		"Sec-Ch-Ua-Platform": `"macOS"`,
-		"Sec-Fetch-Dest":     "empty",
-		"Sec-Fetch-Mode":     "cors",
-		"Sec-Fetch-Site":     "same-origin",
-		"User-Agent":         grokWebUA,
-		"x-statsig-id":       grokWebStatsigID,
-		"x-xai-request-id":   uuid.New().String(),
-		"traceparent":        "00-" + traceID + "-" + spanID + "-00",
-	}
-	status, _, err := validateProbeDo(ctx, http.MethodPost, grokWebProbeURL, headers, payload)
-	if err != nil {
-		return validateOutcome{supported: true, message: err.Error()}
-	}
-	// Any non-401/403 answer (200, 400, 429) means the cookie was accepted.
-	if status == http.StatusUnauthorized || status == http.StatusForbidden {
-		return validateOutcome{supported: true, message: "Invalid SSO cookie — re-paste from grok.com DevTools → Cookies → sso"}
-	}
-	return validateOutcome{valid: true, supported: true}
-}
-
-// --- perplexity-web: session cookie probe (upstream `case "perplexity-web"`) ---
-
-const (
-	perplexityWebProbeURL = "https://www.perplexity.ai/rest/sse/perplexity_ask"
-	perplexityWebCookie   = "__Secure-next-auth.session-token"
-)
-
-func validatePerplexityWeb(ctx context.Context, apiKey string) validateOutcome {
-	sessionToken := strings.TrimPrefix(strings.TrimSpace(apiKey), perplexityWebCookie+"=")
-	tz := time.Now().Location().String()
-	payload, _ := json.Marshal(map[string]any{
-		"query_str": "ping",
-		"params": map[string]any{
-			"query_str":             "ping",
-			"search_focus":          "internet",
-			"mode":                  "concise",
-			"model_preference":      "pplx_pro",
-			"sources":               []string{"web"},
-			"attachments":           []any{},
-			"frontend_uuid":         uuid.New().String(),
-			"frontend_context_uuid": uuid.New().String(),
-			"version":               "2.18",
-			"language":              "en-US",
-			"timezone":              tz,
-			"search_recency_filter": nil,
-			"is_incognito":          true,
-			"use_schematized_api":   true,
-			"last_backend_uuid":     nil,
-		},
-	})
-	headers := map[string]string{
-		"Content-Type":     "application/json",
-		"Accept":           "text/event-stream",
-		"Origin":           "https://www.perplexity.ai",
-		"Referer":          "https://www.perplexity.ai/",
-		"User-Agent":       grokWebUA,
-		"X-App-ApiClient":  "default",
-		"X-App-ApiVersion": "2.18",
-		"Cookie":           perplexityWebCookie + "=" + sessionToken,
-	}
-	status, _, err := validateProbeDo(ctx, http.MethodPost, perplexityWebProbeURL, headers, payload)
-	if err != nil {
-		return validateOutcome{supported: true, message: err.Error()}
-	}
-	if status == http.StatusUnauthorized || status == http.StatusForbidden {
-		return validateOutcome{supported: true, message: "Invalid session cookie — re-paste __Secure-next-auth.session-token from perplexity.ai"}
-	}
-	return validateOutcome{valid: true, supported: true}
 }
 
 // The Qoder endpoint table, PAT check, and credential exchange now live in the

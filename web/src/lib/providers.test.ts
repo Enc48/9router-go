@@ -121,9 +121,9 @@ describe('providers & media separation', () => {
         `${p.id} missing upstream display data (website/notice/authType/authHint)`
       )
     }
-    const grokWeb = PROVIDER_CATALOG.find((p) => p.id === 'grok-web')
-    assert.strictEqual(grokWeb?.authType, 'cookie')
-    assert.ok(grokWeb?.authHint)
+    const deepseekWeb = PROVIDER_CATALOG.find((p) => p.id === 'deepseek-web')
+    assert.strictEqual(deepseekWeb?.authType, 'cookie')
+    assert.ok(deepseekWeb?.authHint)
     const openai = PROVIDER_CATALOG.find((p) => p.id === 'openai')
     assert.strictEqual(openai?.notice?.apiKeyUrl, 'https://platform.openai.com/api-keys')
   })

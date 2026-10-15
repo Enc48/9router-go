@@ -154,30 +154,6 @@ func TestValidateDeepSeekWebSendsBrowserFingerprint(t *testing.T) {
 	}
 }
 
-// TestValidateGeminiWebExplainsItCannotCheck proves the gemini-web probe reports
-// why it cannot answer rather than calling the site.
-//
-// gemini.google.com issues its tokens from inside the browser, so any probe
-// that called it would report a valid cookie as invalid. Saying so is the only
-// answer the user can act on.
-func TestValidateGeminiWebExplainsItCannotCheck(t *testing.T) {
-	calls := withProbeStub(t, func(_ int, _ capturedProbe) (int, []byte, error) {
-		t.Fatal("gemini-web must not probe the site from a build with no browser")
-		return 0, nil, nil
-	})
-
-	rec, out := postValidate(t, `{"provider":"gemini-web","apiKey":"__Secure-1PSID=abc"}`)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
-	}
-	if out["valid"] != false {
-		t.Errorf("valid = %v, want false: this build cannot prove the cookie works", out["valid"])
-	}
-	if len(*calls) != 0 {
-		t.Errorf("expected no outbound probe, got %d", len(*calls))
-	}
-}
-
 // quoteJSON renders a Go string as a JSON string literal, for the raw request
 // bodies these tests post.
 func quoteJSON(s string) string {

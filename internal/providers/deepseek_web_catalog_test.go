@@ -30,12 +30,6 @@ func TestBrowserLoginProvidersInCatalog(t *testing.T) {
 				"DeepSeek-V3.2", "DeepSeek-Search",
 			},
 		},
-		{
-			id:      "gemini-web",
-			baseURL: "https://gemini.google.com/app",
-			alias:   "gweb",
-			models:  []string{"gemini-3.1-pro", "gemini-3.7-flash", "gemini-3.1-flash-lite"},
-		},
 	}
 
 	for _, tt := range tests {
@@ -90,11 +84,6 @@ func TestBrowserLoginProvidersAreIsolated(t *testing.T) {
 			want:    "deepseek-web",
 			notThis: []string{"deepseek", "ds", "sumopod"},
 		},
-		{
-			alias:   "gweb",
-			want:    "gemini-web",
-			notThis: []string{"gemini", "gemini-cli", "gc"},
-		},
 	}
 
 	for _, tt := range tests {
@@ -123,8 +112,5 @@ func TestBrowserLoginProvidersAreIsolated(t *testing.T) {
 	// the wrong host would send one site's credential to the other.
 	if KnownProviders["deepseek-web"].BaseURL == KnownProviders["deepseek"].BaseURL {
 		t.Error("deepseek-web and deepseek share a base URL")
-	}
-	if KnownProviders["gemini-web"].BaseURL == KnownProviders["gemini"].BaseURL {
-		t.Error("gemini-web and gemini share a base URL")
 	}
 }

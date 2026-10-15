@@ -5,7 +5,6 @@ import (
 	"encoding/json/jsontext"
 	json "encoding/json/v2"
 	"net/http"
-	"strings"
 
 	"9router/proxy/internal/proxy/executor"
 )
@@ -133,20 +132,3 @@ func deepSeekEnvelopeHasToken(body []byte) bool {
 	return json.Unmarshal(data, &flat) == nil && flat.Token != ""
 }
 
-// validateGeminiWeb reports why gemini-web cannot be validated here.
-//
-// gemini.google.com has no credential endpoint to call: it authenticates the
-// page with __Secure-1PSID and issues its API tokens from inside the browser,
-// so the only honest answer to "is this cookie usable" is a completed request
-// through a real browser — which this build does not ship. Probing the site
-// here would report a session as invalid when it may be perfectly valid, which
-// is worse than saying so.
-func validateGeminiWeb(_ context.Context, apiKey string) validateOutcome {
-	if strings.TrimSpace(apiKey) == "" {
-		return validateOutcome{supported: true,
-			message: "Missing Gemini cookies — paste __Secure-1PSID (and __Secure-1PSIDTS when available) from gemini.google.com"}
-	}
-	return validateOutcome{supported: true,
-		message: "gemini-web cannot be validated: gemini.google.com issues its tokens from inside the web client, " +
-			"which this build does not ship. The cookie may still be valid — a chat request will be refused with the same reason."}
-}

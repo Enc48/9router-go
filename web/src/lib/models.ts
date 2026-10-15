@@ -65,13 +65,11 @@ export const PROVIDER_ID_TO_ALIAS: Record<string, string> = {
   "freebuff": "fb",
   "gemini": "gemini",
   "gemini-cli": "gc",
-  "gemini-web": "gweb",
   "github": "gh",
   "gitlab": "gitlab",
   "glm": "glm",
   "glm-cn": "glm-cn",
   "grok-cli": "gcli",
-  "grok-web": "gw",
   "groq": "groq",
   "huggingface": "hf",
   "hyperbolic": "hyp",
@@ -106,7 +104,6 @@ export const PROVIDER_ID_TO_ALIAS: Record<string, string> = {
   "openrouter": "openrouter",
   "perplexity": "pplx",
   "perplexity-agent": "pa",
-  "perplexity-web": "pw",
   "playht": "playht",
   "poolside": "ps",
   "qoder": "qd",
@@ -2239,20 +2236,6 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
       "kind": "embedding"
     }
   ],
-  "gemini-web": [
-    {
-      "id": "gemini-3.1-pro",
-      "name": "Gemini 3.1 Pro"
-    },
-    {
-      "id": "gemini-3.7-flash",
-      "name": "Gemini 3.7 Flash"
-    },
-    {
-      "id": "gemini-3.1-flash-lite",
-      "name": "Gemini 3.1 Flash-Lite"
-    }
-  ],
   "gh": [
     {
       "id": "gpt-5.2",
@@ -2432,56 +2415,6 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
       "id": "grok-4.5-low",
       "name": "Grok 4.5 (Low)",
       "upstreamModelId": "grok-4.5"
-    }
-  ],
-  "grok-web": [
-    {
-      "id": "grok-3",
-      "name": "Grok 3"
-    },
-    {
-      "id": "grok-3-mini",
-      "name": "Grok 3 Mini (Thinking)"
-    },
-    {
-      "id": "grok-3-thinking",
-      "name": "Grok 3 Thinking"
-    },
-    {
-      "id": "grok-4",
-      "name": "Grok 4"
-    },
-    {
-      "id": "grok-4-mini",
-      "name": "Grok 4 Mini (Thinking)"
-    },
-    {
-      "id": "grok-4-thinking",
-      "name": "Grok 4 Thinking"
-    },
-    {
-      "id": "grok-4-heavy",
-      "name": "Grok 4 Heavy (SuperGrok)"
-    },
-    {
-      "id": "grok-4.1-mini",
-      "name": "Grok 4.1 Mini (Thinking)"
-    },
-    {
-      "id": "grok-4.1-fast",
-      "name": "Grok 4.1 Fast"
-    },
-    {
-      "id": "grok-4.1-expert",
-      "name": "Grok 4.1 Expert"
-    },
-    {
-      "id": "grok-4.1-thinking",
-      "name": "Grok 4.1 Thinking"
-    },
-    {
-      "id": "grok-4.2",
-      "name": "Grok 4.2 (4.20 Beta)"
     }
   ],
   "groq": [
@@ -4454,36 +4387,6 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
       "id": "typesafe/jev-1.13",
       "name": "Jev 1.13",
       "kind": "systemone"
-    }
-  ],
-  "perplexity-web": [
-    {
-      "id": "pplx-auto",
-      "name": "Perplexity Auto (Free)"
-    },
-    {
-      "id": "pplx-sonar",
-      "name": "Perplexity Sonar"
-    },
-    {
-      "id": "pplx-gpt",
-      "name": "GPT-5.4 (via Perplexity)"
-    },
-    {
-      "id": "pplx-gemini",
-      "name": "Gemini 3.1 Pro (via Perplexity)"
-    },
-    {
-      "id": "pplx-sonnet",
-      "name": "Claude Sonnet 4.6 (via Perplexity)"
-    },
-    {
-      "id": "pplx-opus",
-      "name": "Claude Opus 4.6 (via Perplexity)"
-    },
-    {
-      "id": "pplx-nemotron",
-      "name": "Nemotron 3 Super (via Perplexity)"
     }
   ],
   "perplexity": [

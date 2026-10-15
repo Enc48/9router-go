@@ -2194,36 +2194,6 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     ]
   },
   {
-    "id": "grok-web",
-    "name": "Grok Web (Subscription)",
-    "category": "webCookie",
-    "alias": "gw",
-    "color": "#1DA1F2",
-    "icon": "auto_awesome",
-    "website": "https://grok.com",
-    "authType": "cookie",
-    "authHint": "Paste your sso= cookie value from grok.com",
-    "noAuth": false,
-    "serviceKinds": [
-      "llm"
-    ]
-  },
-  {
-    "id": "perplexity-web",
-    "name": "Perplexity Web (Pro/Max)",
-    "category": "webCookie",
-    "alias": "pw",
-    "color": "#20808D",
-    "icon": "search",
-    "website": "https://www.perplexity.ai",
-    "authType": "cookie",
-    "authHint": "Paste your __Secure-next-auth.session-token cookie value from perplexity.ai",
-    "noAuth": false,
-    "serviceKinds": [
-      "llm"
-    ]
-  },
-  {
     "id": "deepseek-web",
     "name": "DeepSeek Web (Free)",
     "category": "webCookie",
@@ -2233,21 +2203,6 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "website": "https://chat.deepseek.com",
     "authType": "cookie",
     "authHint": "Paste your userToken from chat.deepseek.com — DevTools → Application → Local Storage → userToken",
-    "noAuth": false,
-    "serviceKinds": [
-      "llm"
-    ]
-  },
-  {
-    "id": "gemini-web",
-    "name": "Gemini Web (Free)",
-    "category": "webCookie",
-    "alias": "gweb",
-    "color": "#4285F4",
-    "icon": "auto_awesome",
-    "website": "https://gemini.google.com",
-    "authType": "cookie",
-    "authHint": "Paste the full cookie header, the __Secure-1PSID value, or a JSON cookie export from gemini.google.com. Not routable in this build: it needs a real browser, which the Go binary does not ship.",
     "noAuth": false,
     "serviceKinds": [
       "llm"

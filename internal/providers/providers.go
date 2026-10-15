@@ -318,10 +318,10 @@ var KnownProviders = map[string]ProviderConfig{
 	// login leaves behind, mirrored from OmniRoute
 	// open-sse/config/providers/registry/deepseek/web/index.ts. It is a distinct
 	// deployment with its own credential and quota, so it is never aliased onto
-	// the API-key `deepseek` above (AGENTS.md section 3.A). Unlike grok-web and
-	// perplexity-web it does not send the pasted value as a raw cookie: the
-	// userToken is exchanged for a short-lived Bearer access token first, which
-	// is why it keeps the Authorization/bearer shape.
+	// the API-key `deepseek` above (AGENTS.md section 3.A). It does not send the
+	// pasted value as a raw cookie: the userToken is exchanged for a
+	// short-lived Bearer access token first, which is why it keeps the
+	// Authorization/bearer shape.
 	"deepseek-web": {
 		BaseURL:    "https://chat.deepseek.com/api/v0/chat/completion",
 		AuthHeader: "Authorization",
@@ -401,18 +401,6 @@ var KnownProviders = map[string]ProviderConfig{
 		AuthHeader: "Authorization",
 		AuthScheme: "bearer",
 		Format:     "gemini-openai",
-	},
-	// Gemini Web: catalog-only, mirroring OmniRoute
-	// open-sse/config/providers/registry/gemini/web/index.ts. gemini.google.com
-	// has no API the web client calls directly — the answer only exists in the
-	// XHR response the page receives — so upstream drives it with an embedded
-	// Chromium. This build ships no browser, so the entry exists to make the
-	// models listable and credentials manageable; the executor refuses a chat
-	// request with that reason instead of failing as a bad cookie.
-	"gemini-web": {
-		BaseURL:    "https://gemini.google.com/app",
-		AuthHeader: "Authorization",
-		AuthScheme: "bearer",
 	},
 	"antigravity": {
 		BaseURL:    "https://daily-cloudcode-pa.googleapis.com",
@@ -917,11 +905,6 @@ var KnownProviders = map[string]ProviderConfig{
 		AuthHeader: "Authorization",
 		AuthScheme: "bearer",
 	},
-	"perplexity-web": {
-		BaseURL:    "https://www.perplexity.ai/rest/sse/perplexity_ask",
-		AuthHeader: "Authorization",
-		AuthScheme: "bearer",
-	},
 	"playht": {
 		BaseURL:    "https://api.play.ht/api/v2/tts/stream",
 		AuthHeader: "Authorization",
@@ -1003,11 +986,6 @@ var KnownProviders = map[string]ProviderConfig{
 	// It is never aliased onto qoder (AGENTS.md section 3.A).
 	"qoder-cn": {
 		BaseURL:    "https://gateway.qoder.com.cn/algo/api/v2/service/pro/sse/agent_chat_generation",
-		AuthHeader: "Authorization",
-		AuthScheme: "bearer",
-	},
-	"grok-web": {
-		BaseURL:    "https://grok.com/rest/app-chat/conversations/new",
 		AuthHeader: "Authorization",
 		AuthScheme: "bearer",
 	},

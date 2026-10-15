@@ -88,10 +88,22 @@ func ConcealOpenCodeV2FingerprintTools(body []byte, flat bool, forceAutoChoice b
 	// applyFingerprintTools): the appended tools keep strict:false on the
 	// Responses lane, and the forced-choice check below only sees
 	// caller-declared names.
-	var appended []string
+	//
+	// The presence check runs on post-alias names, like upstream's
+	// appendMissingFingerprintTools: a caller read/shell with a different
+	// definition travels under a *_client alias, so the name is absent and
+	// the exact definition is still appended. Checking the pre-alias `seen`
+	// set instead would send no exact fingerprint at all and the gate 403s.
 	current, _ := request["tools"].([]any)
+	present := make(map[string]bool, 2)
+	for _, tool := range current {
+		if name := toolNameOf(tool); name == "read" || name == "shell" {
+			present[name] = true
+		}
+	}
+	var appended []string
 	for _, name := range []string{"read", "shell"} {
-		if seen[name] {
+		if present[name] {
 			continue
 		}
 		tool, err := openCodeV2Tool(name, flat)

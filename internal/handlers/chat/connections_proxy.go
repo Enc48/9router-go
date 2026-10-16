@@ -187,8 +187,7 @@ func (h *ChatHandler) getClientForConnection(connData *ConnectionData) (*http.Cl
 			}
 		}
 
-		baseTransport := internalproxy.NewSafeTransport()
-		baseTransport.Proxy = http.ProxyURL(parsedURL)
+		baseTransport := internalproxy.NewSafeTransportForProxy(parsedURL.String())
 		client = &http.Client{
 			Transport: baseTransport,
 			Timeout:   h.Client.Timeout,

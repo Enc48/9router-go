@@ -103,13 +103,8 @@ func InsecureClientFor(proxyURL string) *http.Client {
 	if client, ok = insecureClients[proxyURL]; ok {
 		return client
 	}
-	transport := NewSafeTransport()
+	transport := NewSafeTransportForProxy(proxyURL)
 	transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
-	if proxyURL != "" {
-		if u, err := url.Parse(proxyURL); err == nil {
-			transport.Proxy = http.ProxyURL(u)
-		}
-	}
 	client = &http.Client{Transport: transport, Timeout: directProxyClient.Timeout}
 	insecureClients[proxyURL] = client
 	return client

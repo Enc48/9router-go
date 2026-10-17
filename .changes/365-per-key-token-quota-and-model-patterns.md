@@ -35,3 +35,55 @@ them `*claude*` against `anthropic/claude-sonnet-4` and every deny-only list.
 **Verified:** `go test ./internal/providers/ ./internal/handlers/chat/` — both
 packages ok; the 7 previously failing cases are green alongside 40 new matcher
 cases.
+
+### feat(keys): meter per-key token quotas from the caller, and let a budget be reset
+
+Per-key token budgets are made real (#365): the spend a `tokenQuota` is measured
+against is now attributed to the client that spent it, an exhausted key can be
+given a fresh budget without deleting its history, and the dashboard can read the
+spend it is rendering.
+
+**Why — the quota was inert.** `usageHistory.apiKey` holds the **upstream**
+credential (masked), not the caller: the usage writer stores
+`maskAPIKey(info.APIKey)`, and the suite pinned that behaviour elsewhere. The sum
+a quota was measured from therefore never matched a client key. On the live
+database this was 0 rows out of 634, so `checkApiKeyQuota` could never fire and a
+runaway client was never bounded — which is the first thing the issue asks for.
+The unit test that appeared to cover this inserted its own rows keyed by the
+client key, so it passed without touching the real write path.
+
+**What changed:**
+
+- `usageHistory.clientKey` (additive column) records the caller, masked, written
+  from the request context in `logUsage` through the new
+  `middleware.AuthenticatedApiKeyFromContext` — the auth middleware already put
+  the key on the context, so no request-path change was needed.
+  `InsertUsageHistory` takes it as a trailing variadic so the fixtures and
+  migrations that have no caller to name keep compiling unchanged.
+- `tokenUsageSince` sums `clientKey = ? OR apiKey = ? OR apiKey = ?`: the last
+  two keep rows written by the upstream Next.js dashboard counting, since that
+  ledger stored the client key where this one stores the upstream credential.
+  No index is added — the predicate is an OR across two columns, which no
+  single-column index serves.
+- `apiKeys.quotaResetId` plus `ResetApiKeyQuota` and
+  `POST /api/keys/{id}/reset-quota`: the mark is the `usageHistory` row id the
+  budget is measured from, taken in the same transaction as the write. A row id
+  and not a timestamp because `usageHistory.timestamp` is RFC3339 at second
+  precision, so a reset issued in the same second as the spend that exhausted
+  the key would compare equal and keep charging it — exactly the case an
+  operator hits when they reset a key they just watched fail.
+- `GET /api/keys` carries `usedTokens` next to `tokenQuota`, so the dashboard can
+  render a budget instead of guessing whether a key is untouched or exhausted.
+
+**Verified:** `go test ./internal/...` — 43 packages ok; the integration suite ok,
+including a new end-to-end test that spends past a one-token budget, is refused
+with 403 and the `X-Token-Quota-*` headers without reaching the provider, is reset
+through the endpoint, and is then served again. A new db test pins that an
+unattributed row (upstream credential only) is not charged to any client key,
+while a legacy row carrying the client key still is.
+
+**Divergence from upstream, on purpose:** the refusal stays **403** with a
+`Token quota exhausted` body, not the issue's 429 `key_quota_exceeded`. The port
+documents why: a lifetime budget is not a per-window rate, so `Retry-After` and
+`X-RateLimit-Reset` would both promise that waiting helps when only an operator
+raising the quota does.

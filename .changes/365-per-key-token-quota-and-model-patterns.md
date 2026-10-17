@@ -74,6 +74,10 @@ client key, so it passed without touching the real write path.
   operator hits when they reset a key they just watched fail.
 - `GET /api/keys` carries `usedTokens` next to `tokenQuota`, so the dashboard can
   render a budget instead of guessing whether a key is untouched or exhausted.
+- The keys table shows the pair as `spent / budget`, paints an exhausted key in
+  the danger tone, and gains **Reset token quota** on a metered key's action menu
+  — the reset runs without a confirmation because it is the recoverable
+  direction, and the usage history is never touched by it.
 
 **Verified:** `go test ./internal/...` — 43 packages ok; the integration suite ok,
 including a new end-to-end test that spends past a one-token budget, is refused

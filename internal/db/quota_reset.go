@@ -66,6 +66,14 @@ func (r *Repo) ResetApiKeyQuota(ctx context.Context, keyID string) (int, error) 
 	if n, err := res.RowsAffected(); err == nil && n == 0 {
 		return 0, errNoSuchApiKey
 	}
+	// A reset starts the key from zero, and zero includes the carryover a
+	// previous ledger prune banked (#392). Clearing it in the same transaction
+	// keeps the mark and the carryover from ever disagreeing: after this
+	// commit the key's spend is 0 no matter which of the two rows a reader
+	// looks at first.
+	if _, err := tx.ExecContext(ctx, `DELETE FROM usageLedgerCarryover WHERE keyId = ?`, keyID); err != nil {
+		return 0, fmt.Errorf("reset api key quota %s: clear carryover: %w", keyID, err)
+	}
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("reset api key quota %s: commit: %w", keyID, err)
 	}
@@ -138,7 +146,44 @@ func (r *Repo) GetApiKeyTokenUsageByID(ctx context.Context, keyID string) (int, 
 	if err != nil {
 		return 0, err
 	}
-	return r.tokenUsageSince(ctx, row.Key, mark)
+	return r.tokenUsageSince(ctx, row.Key, keyID, mark)
+}
+
+// apiKeyIDForKey resolves an apiKeys row id from the key secret, which is what
+// the limiter holds and what a carryover row is keyed by. An unregistered key
+// has no id: it has no budget either, so there is nothing for a carryover to
+// keep exact.
+func (r *Repo) apiKeyIDForKey(ctx context.Context, rawKey string) (string, error) {
+	if r == nil || r.db == nil || rawKey == "" {
+		return "", nil
+	}
+	var id string
+	err := r.db.QueryRowContext(ctx, `SELECT id FROM apiKeys WHERE key = ? LIMIT 1`, rawKey).Scan(&id)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("resolve api key id: %w", err)
+	}
+	return id, nil
+}
+
+// ledgerCarryover returns the token spend a ledger prune banked for one key, or
+// 0 when nothing has ever been pruned for it. A missing table — a database
+// opened by an older build — answers 0 rather than failing the read: the
+// carryover is an additive term, and a budget that cannot read it is exactly
+// the pre-#392 lifetime sum.
+func (r *Repo) ledgerCarryover(ctx context.Context, keyID string) int64 {
+	if r == nil || r.db == nil || keyID == "" {
+		return 0
+	}
+	var tokens int64
+	if err := r.db.QueryRowContext(ctx,
+		`SELECT COALESCE(tokens, 0) FROM usageLedgerCarryover WHERE keyId = ? LIMIT 1`, keyID,
+	).Scan(&tokens); err != nil {
+		return 0
+	}
+	return tokens
 }
 
 // tokenUsageSince sums a key's prompt+completion tokens recorded after a reset
@@ -153,10 +198,15 @@ func (r *Repo) GetApiKeyTokenUsageByID(ctx context.Context, keyID string) (int, 
 // that ledger stored the client key in apiKey, where this one stores the upstream
 // credential, so both spellings are summed.
 //
+// The usageLedgerCarryover term (#392) is what keeps this sum exact when an
+// operator prunes the ledger: the rows the prune deleted contributed to the
+// budget, so their total is banked per key and added back here. Without it a
+// prune would silently refund spend and un-exhaust an exhausted key.
+//
 // No index is added for the column: the predicate is an OR across two columns,
 // which no single-column index serves, and the alternative — a join on the
 // apiKeys table — costs more than the scan it replaces.
-func (r *Repo) tokenUsageSince(ctx context.Context, rawKey string, mark int) (int, error) {
+func (r *Repo) tokenUsageSince(ctx context.Context, rawKey, keyID string, mark int) (int, error) {
 	if rawKey == "" {
 		return 0, nil
 	}
@@ -171,5 +221,5 @@ func (r *Repo) tokenUsageSince(ctx context.Context, rawKey string, mark int) (in
 	if err := r.db.QueryRowContext(ctx, query, args...).Scan(&used); err != nil {
 		return 0, fmt.Errorf("get api key token usage: %w", err)
 	}
-	return int(used), nil
+	return int(used + r.ledgerCarryover(ctx, keyID)), nil
 }

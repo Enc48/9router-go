@@ -8,10 +8,12 @@ import (
 
 // Retention bounds for the diagnostic tables.
 //
-// requestDetails is pruned. usageHistory is not: it is the billing ledger, the
-// `all` usage period reads it directly, and a day can be settled against it
-// after the fact. Deleting it to save disk is not a decision this background job
-// gets to make on its own.
+// requestDetails is pruned by default. usageHistory is pruned only when the
+// operator opts in via usageHistoryRetentionDays (#392): it is the billing
+// ledger, the `all` usage period reads it directly, and a day can be settled
+// against it after the fact. Deleting it to save disk is not a decision this
+// background job gets to make on its own — and when the operator does make it,
+// PruneUsageHistory banks the deleted spend so no key's budget is refunded.
 //
 // requestDetails on the other hand only ever feeds the "Recent Request
 // Details" tab, which shows the newest page and nothing older. Nothing bills

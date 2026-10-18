@@ -348,7 +348,11 @@ func (r *Repo) GetApiKeyTokenUsage(rawKey string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	return r.tokenUsageSince(ctx, rawKey, mark)
+	keyID, err := r.apiKeyIDForKey(ctx, rawKey)
+	if err != nil {
+		return 0, err
+	}
+	return r.tokenUsageSince(ctx, rawKey, keyID, mark)
 }
 
 // SetApiKeyExpiry sets expiresAt for an API key.

@@ -102,4 +102,22 @@ func runRetentionPass(ctx context.Context, repo *Repo, defaultRetention time.Dur
 			log.Printf("[RETENTION] PRAGMA optimize failed: %v", err)
 		}
 	}
+
+	// The ledger is opt-in (#392): 0 means keep every row forever, which is the
+	// only safe default because the ledger is what a per-key token budget is
+	// measured against. A pass banks the deleted spend as carryover, so the
+	// budget still reads the same number afterwards.
+	if window := repo.UsageHistoryRetention(); window > 0 {
+		ledger, err := repo.PruneUsageHistory(passCtx, window, false)
+		if err != nil {
+			if ctx.Err() == nil {
+				log.Printf("[RETENTION] usageHistory prune failed: %v", err)
+			}
+			return
+		}
+		if ledger.Rows > 0 {
+			log.Printf("[RETENTION] pruned %d usageHistory rows older than %s (banked %d tokens as carryover)",
+				ledger.Rows, window, ledger.Tokens)
+		}
+	}
 }

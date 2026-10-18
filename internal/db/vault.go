@@ -430,8 +430,6 @@ func connSecretFields(data string) []string {
 				found = append(found, "providerSpecificData."+name)
 			}
 		}
-	} else if psd, ok := fields["providerSpecificData"].(string); ok && psd != "" {
-		// In case providerSpecificData is a json string or map encoded differently, but decodeObject parses top-level JSON objects.
 	}
 	return found
 }

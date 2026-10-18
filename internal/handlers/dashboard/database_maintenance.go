@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"net/http"
+	"strconv"
 	"time"
 
 	"9router/proxy/internal/handlerutil"
@@ -41,6 +42,53 @@ func (h *DashboardHandler) HandlePruneDatabase(w http.ResponseWriter, r *http.Re
 		"pruned":  result.Total(),
 		"byAge":   result.ByAge,
 		"bySize":  result.BySize,
+	})
+}
+
+// HandlePruneUsageHistory handles POST /api/settings/database/prune-usage.
+//
+// Separate from /prune on purpose: that button owns requestDetails, the
+// diagnostics table, and an operator pressing it must never delete billing
+// rows as a side effect. This one is the only path that touches usageHistory,
+// and it takes an explicit window plus an explicit dry-run so the row count is
+// known before anything goes.
+func (h *DashboardHandler) HandlePruneUsageHistory(w http.ResponseWriter, r *http.Request) {
+	if h.Repo == nil {
+		handlerutil.WriteJSONError(w, http.StatusServiceUnavailable, "database repo unavailable")
+		return
+	}
+
+	dryRun := r.URL.Query().Get("dryRun") == "1" || r.URL.Query().Get("dryRun") == "true"
+
+	days := h.Repo.UsageHistoryRetention()
+	if raw := r.URL.Query().Get("days"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n <= 0 {
+			handlerutil.WriteJSONError(w, http.StatusBadRequest, "days must be a positive integer")
+			return
+		}
+		days = time.Duration(n) * 24 * time.Hour
+	}
+	if days <= 0 {
+		handlerutil.WriteJSONError(w, http.StatusBadRequest,
+			"usageHistory retention is not configured; set usageHistoryRetentionDays or pass ?days=N")
+		return
+	}
+
+	result, err := h.Repo.PruneUsageHistory(r.Context(), days, dryRun)
+	if err != nil {
+		handlerutil.WriteJSONError(w, http.StatusInternalServerError, "failed to prune usage history: "+err.Error())
+		return
+	}
+	handlerutil.WriteJSON(w, http.StatusOK, map[string]any{
+		"success": true,
+		"dryRun":  result.DryRun,
+		"rows":    result.Rows,
+		"tokens":  result.Tokens,
+		"cutoff":  result.Cutoff,
+		"days":    int(days / (24 * time.Hour)),
+		"pruned":  result.Rows,
+		"ledger":  true,
 	})
 }
 

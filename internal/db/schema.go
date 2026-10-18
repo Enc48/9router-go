@@ -434,6 +434,9 @@ func EnsureCoreSchema(db *sql.DB) error {
 	if err := EnsureKeiRouterTables(db); err != nil {
 		return err
 	}
+	if err := ensureUsageLedgerTables(db); err != nil {
+		return err
+	}
 	if err := EnsureAdditiveColumns(db); err != nil {
 		return err
 	}
@@ -449,6 +452,46 @@ func EnsureCoreSchema(db *sql.DB) error {
 	}
 	if err := BackfillCompressionAnalytics(db); err != nil {
 		return err
+	}
+	return nil
+}
+
+// usageLedgerTables are Go-only tables derived from usageHistory (#392).
+//
+// They are not part of coreSchema on purpose: coreSchema mirrors the upstream
+// Next.js schema so both applications can open the same database file, and a
+// table the upstream does not know about has no business in that mirror.
+// Creating it here keeps it additive and idempotent, exactly like the
+// KeiRouter tables.
+func usageLedgerTables() []tableDef {
+	return []tableDef{
+		{
+			// One row per apiKey that has had ledger rows pruned. `tokens` is
+			// the prompt+completion sum the deleted rows contributed to that
+			// key's budget, so tokenUsageSince can add it back and a prune
+			// never silently refunds an exhausted key.
+			//
+			// keyId is apiKeys.id, not the key string: the ledger keeps two
+			// spellings of a key (raw and masked), and pinning the carryover
+			// to the key row means a rename of the secret does not orphan it.
+			name: "usageLedgerCarryover",
+			columns: [][2]string{
+				{"keyId", "TEXT PRIMARY KEY"},
+				{"tokens", "INTEGER NOT NULL DEFAULT 0"},
+				{"updatedAt", "TEXT NOT NULL DEFAULT ''"},
+			},
+		},
+	}
+}
+
+func ensureUsageLedgerTables(db *sql.DB) error {
+	if db == nil {
+		return fmt.Errorf("usage ledger tables: nil db")
+	}
+	for _, t := range usageLedgerTables() {
+		if err := ensureTable(db, t); err != nil {
+			return err
+		}
 	}
 	return nil
 }

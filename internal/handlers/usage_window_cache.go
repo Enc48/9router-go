@@ -330,8 +330,11 @@ func subtractFrom(t *rawTotals, row db.UsageHistoryRow, promptTok, complTok, cac
 // it would have reported had it been re-folded from scratch.
 //
 // The rows that left the window are the ones the cache already folded, and they
-// are still in the table because usageHistory is never pruned. Reading them back
-// and subtracting is exact: the same per-row values go down as went up.
+// are still in the table: usageHistory is pruned only at windows of at least
+// MinUsageHistoryRetention (db), which is wider than any sliding window this
+// cache tracks, so a row still owed a subtraction cannot have been deleted.
+// Reading them back and subtracting is exact: the same per-row values go down as
+// went up.
 func (a *rawAggregate) subtractOutOfWindow(repo *db.Repo, oldCutoff, newCutoff string) error {
 	if newCutoff <= oldCutoff {
 		return nil

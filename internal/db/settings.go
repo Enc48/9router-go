@@ -89,7 +89,12 @@ type SettingsData struct {
 	EnableObservability        bool                            `json:"enableObservability"`
 	ObservabilityMode          string                          `json:"observabilityMode,omitempty"`
 	RetentionDays              int                             `json:"retentionDays,omitempty"`
-	MaxRequestRecords          int                             `json:"maxRequestRecords,omitempty"`
+	// UsageHistoryRetentionDays bounds the billing ledger (#392). 0 keeps every
+	// row forever, which is the only safe default: the ledger is what a per-key
+	// token budget is measured against, so deleting from it is an operator's
+	// decision, never something a fresh install makes on its own.
+	UsageHistoryRetentionDays int `json:"usageHistoryRetentionDays,omitempty"`
+	MaxRequestRecords         int `json:"maxRequestRecords,omitempty"`
 }
 
 // DefaultSettings returns fallback settings.
@@ -270,6 +275,9 @@ func (r *Repo) GetSettings() (*SettingsData, error) {
 	}
 	if v := settingsInt(raw["maxRequestRecords"]); v > 0 {
 		s.MaxRequestRecords = v
+	}
+	if v := settingsInt(raw["usageHistoryRetentionDays"]); v >= 0 && raw["usageHistoryRetentionDays"] != nil {
+		s.UsageHistoryRetentionDays = v
 	}
 
 	// Global provider fallback strategy

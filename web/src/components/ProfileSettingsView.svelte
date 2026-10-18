@@ -44,10 +44,11 @@
   let observabilityMode = $state<'full' | 'errors_only' | 'off'>('full')
   let retentionDays = $state<number>(7)
   let maxRequestRecords = $state<number>(5000)
+  let usageHistoryRetentionDays = $state<number>(0)
   let dbStats = $state<DatabaseStats | null>(null)
   let isPruning = $state(false)
+  let isPruningUsage = $state(false)
   let isVacuuming = $state(false)
-
   // Global System Prompt State
   let enableSystemPrompt = $state(false)
   let systemPromptPrefix = $state('')
@@ -108,6 +109,9 @@
       }
       if (typeof settings.retentionDays === 'number') retentionDays = settings.retentionDays
       if (typeof settings.maxRequestRecords === 'number') maxRequestRecords = settings.maxRequestRecords
+      if (typeof settings.usageHistoryRetentionDays === 'number') {
+        usageHistoryRetentionDays = settings.usageHistoryRetentionDays
+      }
       if (typeof settings.sessionTimeout === 'string') sessionTimeout = settings.sessionTimeout
       if (typeof settings.fallbackStrategy === 'string') fallbackStrategy = settings.fallbackStrategy
       if (typeof settings.stickyRoundRobinLimit === 'number') stickyRoundRobinLimit = settings.stickyRoundRobinLimit
@@ -187,6 +191,7 @@
         retentionDays,
         maxRequestRecords,
         fallbackStrategy,
+        usageHistoryRetentionDays,
         stickyRoundRobinLimit,
         comboStrategy,
         forceFallback,
@@ -372,6 +377,27 @@
     }
   }
 
+
+  async function handlePruneUsage() {
+    const daysLabel = usageHistoryRetentionDays > 0 ? `${usageHistoryRetentionDays} days` : '30 days'
+    const effectiveDays = usageHistoryRetentionDays > 0 ? usageHistoryRetentionDays : 30
+    try {
+      isPruningUsage = true
+      const preview = await api.pruneUsageHistory({ days: effectiveDays, dryRun: true })
+      const oldest = dbStats?.usageHistoryOldestTimestamp ? ` (oldest row: ${dbStats.usageHistoryOldestTimestamp.slice(0, 10)})` : ''
+      const prompt = `Prune usage history older than ${daysLabel}${oldest}?\n\nThis will permanently delete ${preview.wouldDelete?.toLocaleString() ?? 0} request records before ${preview.cutoff.slice(0, 10)}. Per-key token budgets will be carried over.\n\nType "PRUNE" to confirm:`
+      const answer = window.prompt(prompt)
+      if (answer !== 'PRUNE') return
+
+      const res = await api.pruneUsageHistory({ days: effectiveDays })
+      alert(`Pruned ${res.pruned?.toLocaleString() ?? 0} ledger record(s). ${res.carriedTokens?.toLocaleString() ?? 0} tokens carried into per-key budgets.`)
+      await loadDbStats()
+    } catch (err) {
+      alert(`Failed to prune usage history: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      isPruningUsage = false
+    }
+  }
   async function handleVacuum() {
     if (!confirm('Compact SQLite database (VACUUM)? This will return unallocated pages back to disk.')) return
     try {
@@ -809,7 +835,7 @@
         </p>
 
         <!-- Observability Mode & Retention Controls -->
-        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
           <div class="space-y-1">
             <label class="text-[11px] font-medium text-text-muted">Observability Mode</label>
             <select
@@ -823,7 +849,7 @@
           </div>
 
           <div class="space-y-1">
-            <label class="text-[11px] font-medium text-text-muted">Retention Window</label>
+            <label class="text-[11px] font-medium text-text-muted">Diagnostics Retention</label>
             <select
               bind:value={retentionDays}
               class="w-full rounded-lg border border-border bg-surface-2 px-2.5 py-1.5 text-xs text-text-main focus:border-brand-500 focus:outline-none"
@@ -847,6 +873,20 @@
               class="w-full rounded-lg border border-border bg-surface-2 px-2.5 py-1.5 text-xs text-text-main focus:border-brand-500 focus:outline-none"
             />
           </div>
+
+          <div class="space-y-1">
+            <label class="text-[11px] font-medium text-text-muted">Usage Ledger Retention</label>
+            <select
+              bind:value={usageHistoryRetentionDays}
+              class="w-full rounded-lg border border-border bg-surface-2 px-2.5 py-1.5 text-xs text-text-main focus:border-brand-500 focus:outline-none"
+            >
+              <option value={0}>Off (Keep Forever, Recommended)</option>
+              <option value={30}>30 Days</option>
+              <option value={90}>90 Days</option>
+              <option value={180}>180 Days</option>
+              <option value={365}>365 Days (1 Year)</option>
+            </select>
+          </div>
         </div>
 
         <!-- Database Storage Stats & Actions -->
@@ -860,6 +900,13 @@
               <div>
                 <span class="text-text-muted">Request Details: </span>
                 <span class="font-mono font-semibold text-text-main">{dbStats.requestDetailsCount.toLocaleString()} rows</span>
+              </div>
+              <div>
+                <span class="text-text-muted">Usage Ledger: </span>
+                <span class="font-mono font-semibold text-text-main">{dbStats.usageHistoryCount.toLocaleString()} rows</span>
+                {#if dbStats.usageHistoryOldestTimestamp}
+                  <span class="text-[10px] text-text-subtle font-mono ml-1">(since {dbStats.usageHistoryOldestTimestamp.slice(0, 10)})</span>
+                {/if}
               </div>
               {#if dbStats.reclaimableBytes > 0}
                 <div>
@@ -877,6 +924,14 @@
                 class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-surface-2 hover:bg-surface-3 border border-border text-xs text-text-main font-medium transition cursor-pointer disabled:opacity-50"
               >
                 <span>{isPruning ? 'Pruning...' : 'Prune Expired Records'}</span>
+              </button>
+              <button
+                type="button"
+                onclick={handlePruneUsage}
+                disabled={isPruningUsage || !dbStats || dbStats.usageHistoryCount === 0}
+                class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-surface-2 hover:bg-surface-3 border border-border text-xs text-text-main font-medium transition cursor-pointer disabled:opacity-50"
+              >
+                <span>{isPruningUsage ? 'Pruning Ledger...' : 'Prune Usage History'}</span>
               </button>
               <button
                 type="button"

@@ -267,8 +267,12 @@ func openCodeFamilyFormatsFor(base string) *ModelFormats {
 // table carries it as paid chat, so moving it could break working calls.
 // This map answers "which gate serves it", not "what does it cost" — pricing is
 // internal/pricing.KnownFreeModels, where big-pickle is billed at zero while it
-// stays on this paid lane (#410). The two lists are reconciled by
-// model_formats_pricing_divergence_test.go, not by editing one to match the other.
+// stays on this paid lane (#410). The disagreement runs both ways: the -free
+// suffix here does not by itself mean the price table has no row, and
+// deepseek-v4-flash-free resolves to a paid row through the deepseek-v* glob
+// while this map serves it keyless. Both ids are recorded in
+// model_formats_pricing_divergence_test.go, which reconciles the two lists
+// instead of editing one to match the other.
 var openCodeFreeTierModels = map[string]bool{
 	// opencode (free provider)
 	"muse-spark-1.2-contributor-free": true,

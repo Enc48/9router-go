@@ -170,6 +170,11 @@
 
   onMount(() => {
     loadSettings()
+    // The storage card below renders its numbers and its actions from dbStats, so
+    // it stays empty (and the ledger row count and prune button stay hidden)
+    // until something asks for them. Without this the operator has to press a
+    // button that is not on the page yet in order to see the page.
+    loadDbStats()
   })
 
   /** Fills the suffix with the code-integrity rule. The prefix keeps whatever the operator wrote:

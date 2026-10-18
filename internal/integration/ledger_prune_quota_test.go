@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"9router/proxy/internal/auth"
 	"9router/proxy/internal/handlerutil"
 )
 
@@ -50,7 +51,14 @@ func TestLedgerPrunePreservesKeyQuotaEnforcement(t *testing.T) {
 	}
 
 	// Prune the ledger older than 30 days: deletes the 60-day-old row.
-	prune := env.Post(t, "/api/settings/database/prune-usage", map[string]any{"days": 30})
+	//
+	// The CLI token is required, not decorative: prune-usage is an
+	// always-protected path (it deletes billing rows), so the dashboard session
+	// alone is refused with 401. That is the same gate /prune and /vacuum sit
+	// behind, and this test is where a route accidentally left off that list
+	// would show up.
+	prune := env.Post(t, "/api/settings/database/prune-usage", map[string]any{"days": 30},
+		WithoutAPIKey(), WithHeader(auth.CLITokenHeader, auth.CLIToken()))
 	if prune.Status != http.StatusOK {
 		t.Fatalf("prune-usage = %d: %s", prune.Status, truncate(prune.Body))
 	}
@@ -76,4 +84,27 @@ func TestLedgerPrunePreservesKeyQuotaEnforcement(t *testing.T) {
 	if usedAfter != usedBefore {
 		t.Fatalf("usedTokens after prune = %d, want %d", usedAfter, usedBefore)
 	}
+
+	// And the route stays gated: a caller holding only a dashboard session must be
+	// refused. It deletes billing rows, so leaving it off the always-protected
+	// list would let an unauthenticated local caller truncate the ledger whenever
+	// requireLogin is off — the mistake this very PR made and fixed.
+	beforeRefused := countLedgerRows(t, env)
+	unauthorised := env.Post(t, "/api/settings/database/prune-usage", map[string]any{"days": 30})
+	if unauthorised.Status == http.StatusOK {
+		t.Fatal("prune-usage accepted a caller with no admin credential")
+	}
+	if afterRefused := countLedgerRows(t, env); afterRefused != beforeRefused {
+		t.Errorf("usageHistory rows after the refused call = %d, want %d: a refused prune must delete nothing",
+			afterRefused, beforeRefused)
+	}
+}
+
+func countLedgerRows(t *testing.T, env *Env) int {
+	t.Helper()
+	var n int
+	if err := env.Repo.RawDB().QueryRowContext(t.Context(), `SELECT COUNT(*) FROM usageHistory`).Scan(&n); err != nil {
+		t.Fatalf("count usageHistory: %v", err)
+	}
+	return n
 }

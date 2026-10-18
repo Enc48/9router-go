@@ -56,4 +56,9 @@ instance seeded with ledger rows spread over 200 days, the card showed
 "4 rows (since 2026-09-28)"; the key read 13.8k/10.0k and a request through it was
 still refused 403 (13750/10000); *Reset token quota* then reported 0 of 10.0k spent.
 
+- **The route is now always-protected on both lists.** The integration test passes
+  the CLI token on its prune call and asserts that a session-only caller is refused
+  and that the refused call deletes nothing — the two gates had disagreed, since
+  only the route table was fixed before.
+
 Closes #392

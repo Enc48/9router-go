@@ -293,6 +293,9 @@ func TestPruneUsageHistory_QueryPlan(t *testing.T) {
 		}
 		details = append(details, detail)
 	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate plan rows: %v", err)
+	}
 
 	planStr := strings.Join(details, " | ")
 	// SQLite should use INTEGER PRIMARY KEY / rowid seek or idx_uh_ts

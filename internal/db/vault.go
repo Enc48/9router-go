@@ -148,12 +148,11 @@ type ConnectionSealCandidate struct {
 }
 
 // ListConnectionsNeedingSeal returns connections holding a whitelisted secret
-// in `data` with no sealed slot yet. The sealed columns being empty is what
-// keeps an already-sealed row from being re-sealed on every scan.
+// in `data` (either top-level or nested in providerSpecificData) that are not yet fully sealed
+// (i.e. missing secretCiphertext/tokenCiphertext/refreshCiphertext, or still holding plaintext nested secrets
+// even when top-level ciphertexts already exist).
 func (r *Repo) ListConnectionsNeedingSeal() ([]ConnectionSealCandidate, error) {
-	rows, err := r.db.Query(
-		`SELECT id, data FROM providerConnections
-		 WHERE secretCiphertext = '' AND tokenCiphertext = '' AND refreshCiphertext = ''`)
+	rows, err := r.db.Query(`SELECT id, data FROM providerConnections`)
 	if err != nil {
 		return nil, fmt.Errorf("list connections needing seal: %w", err)
 	}
@@ -175,23 +174,36 @@ func (r *Repo) ListConnectionsNeedingSeal() ([]ConnectionSealCandidate, error) {
 // VaultCounts reports how many connections are sealed and how many still hold a
 // plaintext credential, for the dashboard status route.
 func (r *Repo) VaultCounts() (sealed, plaintext int, err error) {
-	rows, err := r.db.Query(
-		`SELECT
-		   CASE WHEN secretCiphertext <> '' OR tokenCiphertext <> '' OR refreshCiphertext <> '' THEN 1 ELSE 0 END,
-		   CASE WHEN secretCiphertext = '' AND tokenCiphertext = '' AND refreshCiphertext = '' THEN 1 ELSE 0 END
-		 FROM providerConnections`)
+	rows, err := r.db.Query(`SELECT data, secretCiphertext, tokenCiphertext, refreshCiphertext FROM providerConnections`)
 	if err != nil {
 		return 0, 0, fmt.Errorf("vault counts: %w", err)
 	}
 	defer rows.Close()
 
 	for rows.Next() {
-		var isSealed, isPlain int
-		if err = rows.Scan(&isSealed, &isPlain); err != nil {
+		var data, secretCt, tokenCt, refreshCt string
+		if err = rows.Scan(&data, &secretCt, &tokenCt, &refreshCt); err != nil {
 			return 0, 0, fmt.Errorf("vault counts: scan: %w", err)
 		}
-		sealed += isSealed
-		plaintext += isPlain
+		hasCiphertext := secretCt != "" || tokenCt != "" || refreshCt != ""
+		hasPlaintext := len(connSecretFields(data)) > 0
+
+		if hasCiphertext && !hasPlaintext {
+			sealed++
+		} else if !hasCiphertext && hasPlaintext {
+			plaintext++
+		} else if hasCiphertext && hasPlaintext {
+			// Partially sealed (e.g. top-level sealed but nested unsealed) counts as plaintext/unsealed until fully sealed
+			plaintext++
+		} else {
+			// Neither ciphertexts nor plaintext secrets (e.g. no credentials at all)
+			// Traditionally considered sealed or plain? Let's check original behavior:
+			// Original: secretCiphertext == '' && tokenCiphertext == '' && refreshCiphertext == '' was isPlain = 1.
+			// But wait, if there are no secrets at all, was it counted as plain or sealed?
+			// Original CASE WHEN secretCiphertext = '' ... THEN 1 ELSE 0 END counted empty ciphertexts as plain.
+			// Wait, let's keep exact compatibility for rows without secrets or ciphertexts, or check what existing tests expect.
+			plaintext++
+		}
 	}
 	if err = rows.Err(); err != nil {
 		return 0, 0, fmt.Errorf("vault counts: %w", err)
@@ -311,34 +323,38 @@ func (r *Repo) sealConnectionData(id, data string) (string, error) {
 		sealedAny = true
 	}
 
-	// What if there is no top-level SlotSecret fields (like apiKey), but ONLY nested providerSpecificData fields?
-	// We should also seal them into SlotSecret!
-	secretWrapped, secretCt, _, _ := r.GetConnectionSealed(id, SlotSecret)
-	hasSecretSealed := secretWrapped != "" || secretCt != ""
-
-	if !hasSecretSealed {
-		if psd, ok := fields["providerSpecificData"].(map[string]any); ok {
-			nestedPayload := make(map[string]any)
-			for _, name := range providerSpecificSecretFields {
-				if s, ok := psd[name].(string); ok && s != "" {
-					nestedPayload["nested.providerSpecificData."+name] = s
-					delete(psd, name)
+	// If there are unsealed nested providerSpecificData secret fields, merge them into SlotSecret
+	if psd, ok := fields["providerSpecificData"].(map[string]any); ok {
+		nestedPayload := make(map[string]any)
+		for _, name := range providerSpecificSecretFields {
+			if s, ok := psd[name].(string); ok && s != "" {
+				nestedPayload["nested.providerSpecificData."+name] = s
+				delete(psd, name)
+			}
+		}
+		if len(nestedPayload) > 0 {
+			secretWrapped, secretCt, _, _ := r.GetConnectionSealed(id, SlotSecret)
+			if secretWrapped != "" && secretCt != "" {
+				if plain, err := r.Vault().Open(secretWrapped, secretCt); err == nil {
+					if existingDecoded, ok := decodeObject(plain); ok {
+						for k, v := range existingDecoded {
+							nestedPayload[k] = v
+						}
+					}
 				}
 			}
-			if len(nestedPayload) > 0 {
-				encoded, err := json.Marshal(nestedPayload)
-				if err != nil {
-					return data, fmt.Errorf("seal connection %s/nested: marshal: %w", id, err)
-				}
-				wrapped, ciphertext, err := r.Vault().Seal(string(encoded))
-				if err != nil {
-					return data, fmt.Errorf("seal connection %s/nested: %w", id, err)
-				}
-				if err = r.SetConnectionSealed(id, SlotSecret, wrapped, ciphertext); err != nil {
-					return data, err
-				}
-				sealedAny = true
+			encoded, err := json.Marshal(nestedPayload)
+			if err != nil {
+				return data, fmt.Errorf("seal connection %s/nested: marshal: %w", id, err)
 			}
+			wrapped, ciphertext, err := r.Vault().Seal(string(encoded))
+			if err != nil {
+				return data, fmt.Errorf("seal connection %s/nested: %w", id, err)
+			}
+			if err = r.SetConnectionSealed(id, SlotSecret, wrapped, ciphertext); err != nil {
+				return data, err
+			}
+			sealedAny = true
 		}
 	}
 

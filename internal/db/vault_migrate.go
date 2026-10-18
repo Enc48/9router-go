@@ -118,4 +118,3 @@ func preMigrationBackupPath(dbPath string) string {
 	}
 	return fmt.Sprintf("%s/pre-vault-%s.sqlite", filepath.Dir(dbPath), time.Now().UTC().Format("20060102-150405"))
 }
-

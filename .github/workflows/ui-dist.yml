@@ -1,0 +1,44 @@
+name: UI dist
+
+# Builds the dashboard on a Linux runner and publishes web/dist to the ui-dist
+# branch. The Termux host cannot run it locally: vite 8 needs rolldown, which
+# ships no android-arm64 binary, so the local dashboard assets have to come from
+# CI instead.
+
+on:
+  # Triggered by a push to this branch rather than workflow_dispatch: GitHub only
+  # registers workflows that exist on the default branch, so a dispatch cannot
+  # see this file until it lands on main — and it is not meant to.
+  push:
+    branches:
+      - 'build/**'
+      - 'feat/**'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  dist:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install the dashboard dependencies
+        run: bun install --frozen-lockfile
+        working-directory: web
+
+      - name: Build the dashboard
+        run: bun web/scripts/web-build.ts
+
+      - name: Publish the built assets to the ui-dist branch
+        uses: crazy-max/ghaction-github-pages@v5
+        with:
+          target_branch: ui-dist
+          build_dir: web/dist
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

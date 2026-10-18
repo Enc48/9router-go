@@ -18,7 +18,6 @@ import (
 	json "encoding/json/v2"
 	"errors"
 	"fmt"
-	"maps"
 	"slices"
 
 	"9router/proxy/internal/log"
@@ -32,6 +31,33 @@ const (
 	SlotToken   = "token"
 	SlotRefresh = "refresh"
 )
+
+// providerSpecificSecretFields lists secret fields stored inside the `providerSpecificData` JSON object.
+var providerSpecificSecretFields = []string{
+	"consoleApiKey",
+	"alibabaConsoleCookie",
+	"alibabaConsoleSecToken",
+	"xiaomiMimoConsoleCookie",
+	"qwenCloudCookie",
+	"qwenCloudSecToken",
+	"volcConsoleCookie",
+	"volcCsrfToken",
+	"ollamaUsageCookie",
+	"ollamaCloudUsageCookie",
+	"ollamaCloudCookie",
+	"usageCookie",
+	"accessToken",
+	"refreshToken",
+	"idToken",
+	"apiKey",
+	"secretAccessKey",
+	"awsSecretAccessKey",
+	"sessionToken",
+	"awsSessionToken",
+	"openCodeGoAuthCookie",
+	"opencodeGoAuthCookie",
+	"authCookie",
+}
 
 // slotFields maps each sealed slot to the whitelisted data fields it holds.
 // The list is exhaustive on purpose: an unlisted field is config, not a
@@ -190,9 +216,9 @@ func (r *Repo) RewrapConnectionDEKs(v *vault.Vault, newMasterKey []byte) (rewrap
 	var targets []target
 	for rows.Next() {
 		var (
-			id                                string
-			secretDEK, secretCT, tokenDEK     string
-			tokenCT, refreshDEK, refreshCT   string
+			id                             string
+			secretDEK, secretCT, tokenDEK  string
+			tokenCT, refreshDEK, refreshCT string
 		)
 		if err = rows.Scan(&id, &secretDEK, &secretCT, &tokenDEK, &tokenCT, &refreshDEK, &refreshCT); err != nil {
 			rows.Close()
@@ -248,6 +274,21 @@ func (r *Repo) sealConnectionData(id, data string) (string, error) {
 		if !taken {
 			continue
 		}
+		// If slot is SlotSecret, also check if there are nested providerSpecificData secret fields to include in the same secret slot payload!
+		if slot == SlotSecret {
+			if psd, ok := fields["providerSpecificData"].(map[string]any); ok {
+				if payload == nil {
+					payload = make(map[string]any)
+				}
+				for _, name := range providerSpecificSecretFields {
+					if s, ok := psd[name].(string); ok && s != "" {
+						payload["nested.providerSpecificData."+name] = s
+						delete(psd, name)
+					}
+				}
+			}
+		}
+
 		encoded, err := json.Marshal(payload)
 		if err != nil {
 			return data, fmt.Errorf("seal connection %s/%s: marshal: %w", id, slot, err)
@@ -259,13 +300,48 @@ func (r *Repo) sealConnectionData(id, data string) (string, error) {
 		if err = r.SetConnectionSealed(id, slot, wrapped, ciphertext); err != nil {
 			return data, err
 		}
-		// Redact exactly the sealed fields; `remaining` was only used to
-		// decide that this slot carries a credential at all.
+		// Redact exactly the sealed fields
 		for name := range payload {
+			if len(name) > 28 && name[:28] == "nested.providerSpecificData." {
+				// already deleted from psd above
+				continue
+			}
 			delete(fields, name)
 		}
 		sealedAny = true
 	}
+
+	// What if there is no top-level SlotSecret fields (like apiKey), but ONLY nested providerSpecificData fields?
+	// We should also seal them into SlotSecret!
+	secretWrapped, secretCt, _, _ := r.GetConnectionSealed(id, SlotSecret)
+	hasSecretSealed := secretWrapped != "" || secretCt != ""
+
+	if !hasSecretSealed {
+		if psd, ok := fields["providerSpecificData"].(map[string]any); ok {
+			nestedPayload := make(map[string]any)
+			for _, name := range providerSpecificSecretFields {
+				if s, ok := psd[name].(string); ok && s != "" {
+					nestedPayload["nested.providerSpecificData."+name] = s
+					delete(psd, name)
+				}
+			}
+			if len(nestedPayload) > 0 {
+				encoded, err := json.Marshal(nestedPayload)
+				if err != nil {
+					return data, fmt.Errorf("seal connection %s/nested: marshal: %w", id, err)
+				}
+				wrapped, ciphertext, err := r.Vault().Seal(string(encoded))
+				if err != nil {
+					return data, fmt.Errorf("seal connection %s/nested: %w", id, err)
+				}
+				if err = r.SetConnectionSealed(id, SlotSecret, wrapped, ciphertext); err != nil {
+					return data, err
+				}
+				sealedAny = true
+			}
+		}
+	}
+
 	if !sealedAny {
 		return data, nil
 	}
@@ -308,7 +384,19 @@ func (r *Repo) openConnectionData(id, data string, sealed [6]string) string {
 				"conn", id, "slot", slot)
 			continue
 		}
-		maps.Copy(fields, decoded)
+		for k, val := range decoded {
+			if len(k) > 28 && k[:28] == "nested.providerSpecificData." {
+				fieldName := k[28:]
+				psd, ok := fields["providerSpecificData"].(map[string]any)
+				if !ok {
+					psd = make(map[string]any)
+					fields["providerSpecificData"] = psd
+				}
+				psd[fieldName] = val
+			} else {
+				fields[k] = val
+			}
+		}
 		opened = true
 	}
 	if !opened {
@@ -322,7 +410,7 @@ func (r *Repo) openConnectionData(id, data string, sealed [6]string) string {
 }
 
 // connSecretFields returns the whitelisted credential names present in a data
-// payload with a non-empty string value.
+// payload with a non-empty string value (including nested providerSpecificData secret fields).
 func connSecretFields(data string) []string {
 	fields, ok := decodeObject(data)
 	if !ok {
@@ -335,6 +423,15 @@ func connSecretFields(data string) []string {
 				found = append(found, name)
 			}
 		}
+	}
+	if psd, ok := fields["providerSpecificData"].(map[string]any); ok {
+		for _, name := range providerSpecificSecretFields {
+			if s, ok := psd[name].(string); ok && s != "" {
+				found = append(found, "providerSpecificData."+name)
+			}
+		}
+	} else if psd, ok := fields["providerSpecificData"].(string); ok && psd != "" {
+		// In case providerSpecificData is a json string or map encoded differently, but decodeObject parses top-level JSON objects.
 	}
 	return found
 }
@@ -367,7 +464,6 @@ func decodeObject(raw string) (map[string]any, bool) {
 	}
 	return fields, true
 }
-
 
 // hydrate re-injects sealed credentials into a connection's data payload.
 //

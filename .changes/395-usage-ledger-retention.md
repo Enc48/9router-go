@@ -41,4 +41,19 @@ tokens only, so a future USD budget measured from this table will need it to gro
 a cost column; and a database shared with upstream 9router will show upstream the
 shortened ledger.
 
+- **The route is now always-protected.** `/api/settings/database/prune-usage` was
+  missing from `IsAlwaysProtectedPath`, so unlike `/prune` and `/vacuum` it answered
+  an unauthenticated local caller while `requireLogin` was off. The always-protected
+  test now asserts membership for the destructive settings routes.
+- **The Storage card loads its numbers on mount.** `loadDbStats` ran only after a
+  prune or vacuum, so a fresh page load showed no row counts and no action buttons
+  at all.
+
+Both were found by driving the running dashboard rather than the suite: on a live
+instance seeded with ledger rows spread over 200 days, the card showed
+"Usage Ledger: 11 rows (since 2026-04-01)"; pressing *Prune Usage History* reported
+"Pruned 7 ledger record(s). 8,750 tokens carried" and the card re-rendered to
+"4 rows (since 2026-09-28)"; the key read 13.8k/10.0k and a request through it was
+still refused 403 (13750/10000); *Reset token quota* then reported 0 of 10.0k spent.
+
 Closes #392

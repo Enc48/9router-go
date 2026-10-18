@@ -107,8 +107,8 @@ var ProviderModels = map[string][]string{
 		"gemini-pro", "gemini-flash", "gemini-flash-lite", "gemini-argon",
 		"gemini-3-pro", "gemini-4-argon",
 	},
-	"gh":                   {"gpt-5.2", "gpt-5.2-codex", "gpt-5.3-codex", "gpt-5.4", "gpt-5.4-mini", "claude-haiku-4.5", "claude-opus-4.5", "claude-sonnet-4.5", "claude-sonnet-4.6", "claude-opus-4.6", "claude-opus-4.7", "gemini-2.5-pro", "gemini-3-flash-preview", "gemini-3.1-pro-preview", "grok-code-fast-1", "oswe-vscode-prime", "goldeneye-free-auto", "text-embedding-3-small", "text-embedding-3-large"},
-	"github":               {"gpt-5.2", "gpt-5.2-codex", "gpt-5.3-codex", "gpt-5.4", "gpt-5.4-mini", "claude-haiku-4.5", "claude-opus-4.5", "claude-sonnet-4.5", "claude-sonnet-4.6", "claude-opus-4.6", "claude-opus-4.7", "gemini-2.5-pro", "gemini-3-flash-preview", "gemini-3.1-pro-preview", "grok-code-fast-1", "oswe-vscode-prime", "goldeneye-free-auto", "text-embedding-3-small", "text-embedding-3-large"},
+	"gh":                   {"gpt-5.2", "gpt-5.2-codex", "gpt-5.3-codex", "gpt-5.4", "gpt-5.4-mini", "claude-haiku-4.5", "claude-opus-4.5", "claude-sonnet-4.5", "claude-sonnet-4.6", "claude-opus-4.6", "claude-opus-4.7", "gemini-2.5-pro", "gemini-3-flash-preview", "gemini-3.1-pro-preview", "grok-code-fast-1", "oswe-vscode-prime", "goldeneye-free-auto", "text-embedding-3-small", "text-embedding-ada-002"},
+	"github":               {"gpt-5.2", "gpt-5.2-codex", "gpt-5.3-codex", "gpt-5.4", "gpt-5.4-mini", "claude-haiku-4.5", "claude-opus-4.5", "claude-sonnet-4.5", "claude-sonnet-4.6", "claude-opus-4.6", "claude-opus-4.7", "gemini-2.5-pro", "gemini-3-flash-preview", "gemini-3.1-pro-preview", "grok-code-fast-1", "oswe-vscode-prime", "goldeneye-free-auto", "text-embedding-3-small", "text-embedding-ada-002"},
 	"glm":                  {"glm-5.3", "glm-5.3-flash", "glm-5.2", "glm-5.1", "glm-5-turbo", "glm-5", "glm-4.7", "glm-4.6v"},
 	"glm-cn":               {"glm-5.3", "glm-5.3-flash", "glm-5.2", "glm-5.1", "glm-5-turbo", "glm-5", "glm-4.7", "glm-4.6v", "glm-4.6", "glm-4.5-air"},
 	"grok-cli":             {"grok-build", "grok-4.5", "grok-4.5-high", "grok-4.5-medium", "grok-4.5-low"},
@@ -357,12 +357,12 @@ var ProviderModelKinds = map[string]map[string]string{
 		"text-embedding-005":             "embedding",
 	},
 	"gh": {
-		"text-embedding-3-large": "embedding",
 		"text-embedding-3-small": "embedding",
+		"text-embedding-ada-002": "embedding",
 	},
 	"github": {
-		"text-embedding-3-large": "embedding",
 		"text-embedding-3-small": "embedding",
+		"text-embedding-ada-002": "embedding",
 	},
 	"groq": {
 		"distil-whisper-large-v3-en": "stt",

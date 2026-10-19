@@ -122,7 +122,7 @@ func TestVaultNestedMigrationPreservesTopLevelAndSealsNested(t *testing.T) {
 	}
 
 	// Check that candidate listing returns this row even though top-level ciphertext exists
-	candidates, err := repo.ListConnectionsNeedingSeal()
+	candidates, err := repo.ListConnectionsNeedingSeal(context.Background())
 	if err != nil {
 		t.Fatalf("list candidates: %v", err)
 	}
@@ -189,3 +189,51 @@ func TestVaultNestedMigrationPreservesTopLevelAndSealsNested(t *testing.T) {
 		t.Errorf("final vault counts: sealed=%d, plaintext=%d, want sealed=1, plaintext=0", sealedCount, plaintextCount)
 	}
 }
+
+// TestVaultNestedUnopenableSlot verifies that if an existing SlotSecret ciphertext
+// cannot be opened (e.g. wrong master key or corrupted slot), sealing new nested
+// secrets does not overwrite or destroy the existing top-level sealed credential.
+func TestVaultNestedUnopenableSlot(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "data.sqlite")
+	database, cleanup := setupTestDBAt(t, path)
+	defer cleanup()
+
+	repo := NewRepo(database)
+	repo.SetVault(vault.NewFromEnv())
+
+	const connID = "conn-unopenable"
+	initialData := `{"apiKey":"sk-top-level-original"}`
+	if _, err := repo.RawDB().Exec(
+		`INSERT INTO providerConnections (id, provider, authType, name, isActive, data, createdAt, updatedAt)
+		 VALUES (?, 'openai', 'apikey', 'Test', 1, ?, '2026-07-18T00:00:00Z', '2026-07-18T00:00:00Z')`,
+		connID, initialData,
+	); err != nil {
+		t.Fatalf("insert test connection: %v", err)
+	}
+
+	if _, err := repo.MigratePlaintextCredentials(context.Background(), path); err != nil {
+		t.Fatalf("initial migration: %v", err)
+	}
+
+	// Corrupt secretWrappedDEK so Open fails
+	if _, err := repo.RawDB().Exec(
+		`UPDATE providerConnections SET secretWrappedDEK = 'invalid-wrapped-dek' WHERE id = ?`,
+		connID,
+	); err != nil {
+		t.Fatalf("corrupt wrapped dek: %v", err)
+	}
+
+	updatedData := `{"apiKey":"sk-top-level-original","providerSpecificData":{"usageCookie":"cookie-new-nested"}}`
+	if _, err := repo.RawDB().Exec(
+		`UPDATE providerConnections SET data = ? WHERE id = ?`,
+		updatedData, connID,
+	); err != nil {
+		t.Fatalf("update connection with nested plaintext: %v", err)
+	}
+
+	// Should not error or destroy existing slot when unopenable
+	if _, err := repo.MigratePlaintextCredentials(context.Background(), ""); err != nil {
+		t.Fatalf("migration with unopenable slot: %v", err)
+	}
+}
+

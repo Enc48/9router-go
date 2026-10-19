@@ -14,6 +14,7 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	json "encoding/json/v2"
 	"errors"
@@ -151,8 +152,8 @@ type ConnectionSealCandidate struct {
 // in `data` (either top-level or nested in providerSpecificData) that are not yet fully sealed
 // (i.e. missing secretCiphertext/tokenCiphertext/refreshCiphertext, or still holding plaintext nested secrets
 // even when top-level ciphertexts already exist).
-func (r *Repo) ListConnectionsNeedingSeal() ([]ConnectionSealCandidate, error) {
-	rows, err := r.db.Query(`SELECT id, data FROM providerConnections`)
+func (r *Repo) ListConnectionsNeedingSeal(ctx context.Context) ([]ConnectionSealCandidate, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT id, data FROM providerConnections`)
 	if err != nil {
 		return nil, fmt.Errorf("list connections needing seal: %w", err)
 	}
@@ -505,6 +506,6 @@ func (r *Repo) sealedPairFor(id string) (sealed [6]string) {
 // and returns the payload to store. Writers call it once the row exists, so a
 // create is insert-then-seal and an update is seal-then-write. A vault-less
 // install gets data back unchanged and issues no statement at all.
-func (r *Repo) sealOnWrite(id, data string) (string, error) {
+func (r *Repo) sealOnWrite(ctx context.Context, id, data string) (string, error) {
 	return r.sealConnectionData(id, data)
 }

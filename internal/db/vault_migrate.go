@@ -14,6 +14,7 @@
 package db
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"time"
@@ -42,13 +43,13 @@ type SealResult struct {
 //
 // A vault-less Repo is a no-op, so an install without ROUTER_MASTER_KEY pays
 // nothing and keeps behaving exactly as before.
-func (r *Repo) MigratePlaintextCredentials(dbPath string) (SealResult, error) {
+func (r *Repo) MigratePlaintextCredentials(ctx context.Context, dbPath string) (SealResult, error) {
 	var result SealResult
 	if !r.sealingEnabled() {
 		return result, nil
 	}
 
-	candidates, err := r.ListConnectionsNeedingSeal()
+	candidates, err := r.ListConnectionsNeedingSeal(ctx)
 	if err != nil {
 		return result, err
 	}
@@ -59,14 +60,14 @@ func (r *Repo) MigratePlaintextCredentials(dbPath string) (SealResult, error) {
 	// Backup before the first write. The snapshot is the only way back if the
 	// master key turns out to be wrong for these rows.
 	if target := preMigrationBackupPath(dbPath); target != "" {
-		if err := r.backupDatabase(target); err != nil {
+		if err := r.backupDatabase(ctx, target); err != nil {
 			return result, err
 		}
 		log.Info("vault", "pre-migration backup written", "path", target)
 	}
 
 	for _, c := range candidates {
-		sealed, sErr := r.sealOnWrite(c.ID, c.Data)
+		sealed, sErr := r.sealOnWrite(ctx, c.ID, c.Data)
 		if sErr != nil {
 			// One bad row must not stop the pass: the remaining connections
 			// still need sealing, and this one keeps working plaintext.
@@ -81,7 +82,7 @@ func (r *Repo) MigratePlaintextCredentials(dbPath string) (SealResult, error) {
 		}
 		// sealOnWrite returns the redacted payload; the row itself still holds
 		// the credential until it is rewritten here.
-		if _, wErr := r.db.Exec(`UPDATE providerConnections SET data = ? WHERE id = ?`, sealed, c.ID); wErr != nil {
+		if _, wErr := r.db.ExecContext(ctx, `UPDATE providerConnections SET data = ? WHERE id = ?`, sealed, c.ID); wErr != nil {
 			result.Skipped = append(result.Skipped, fmt.Sprintf("%s: %v", c.ID, wErr))
 			log.Warn("vault", "sealed credentials not redacted in place", "conn", c.ID, "error", wErr)
 			continue
@@ -104,8 +105,8 @@ func (r *Repo) MigratePlaintextCredentials(dbPath string) (SealResult, error) {
 //
 // The snapshot is created owner-only: it holds every provider credential in
 // the clear, exactly as the source did.
-func (r *Repo) backupDatabase(target string) error {
-	if _, err := r.db.Exec(`VACUUM INTO ?`, target); err != nil {
+func (r *Repo) backupDatabase(ctx context.Context, target string) error {
+	if _, err := r.db.ExecContext(ctx, `VACUUM INTO ?`, target); err != nil {
 		return fmt.Errorf("vault backup into %s: %w", target, err)
 	}
 	return nil

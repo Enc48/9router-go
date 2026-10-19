@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -39,7 +40,7 @@ func TestVaultNestedProviderSpecificData(t *testing.T) {
 
 	// Trigger seal on write or migration (with time sleep or unique path if called twice in same second)
 	time.Sleep(10 * time.Millisecond)
-	if _, err := repo.MigratePlaintextCredentials(path); err != nil {
+	if _, err := repo.MigratePlaintextCredentials(context.Background(), path); err != nil {
 		t.Fatalf("migrate plaintext credentials: %v", err)
 	}
 
@@ -99,12 +100,12 @@ func TestVaultNestedMigrationPreservesTopLevelAndSealsNested(t *testing.T) {
 	}
 
 	// Seal initial data so top-level apiKey is sealed
-	if _, err := repo.MigratePlaintextCredentials(path); err != nil {
+	if _, err := repo.MigratePlaintextCredentials(context.Background(), path); err != nil {
 		t.Fatalf("initial migration: %v", err)
 	}
 
 	// Verify sealed
-	sealedCount, plaintextCount, err := repo.VaultCounts()
+	sealedCount, plaintextCount, err := repo.VaultCounts(context.Background())
 	if err != nil {
 		t.Fatalf("vault counts: %v", err)
 	}
@@ -138,7 +139,7 @@ func TestVaultNestedMigrationPreservesTopLevelAndSealsNested(t *testing.T) {
 	}
 
 	// Check that vault counts report it as plaintext (not fully sealed)
-	sealedCount, plaintextCount, err = repo.VaultCounts()
+	_, plaintextCount, err = repo.VaultCounts(context.Background())
 	if err != nil {
 		t.Fatalf("vault counts after adding nested plaintext: %v", err)
 	}
@@ -147,7 +148,7 @@ func TestVaultNestedMigrationPreservesTopLevelAndSealsNested(t *testing.T) {
 	}
 
 	// 3. Run migration again (pass empty path so backup step is skipped or doesn't conflict on second call in same second)
-	if _, err := repo.MigratePlaintextCredentials(""); err != nil {
+	if _, err := repo.MigratePlaintextCredentials(context.Background(), ""); err != nil {
 		t.Fatalf("second migration: %v", err)
 	}
 
@@ -181,7 +182,7 @@ func TestVaultNestedMigrationPreservesTopLevelAndSealsNested(t *testing.T) {
 	}
 
 	// Final vault counts check
-	sealedCount, plaintextCount, err = repo.VaultCounts()
+	sealedCount, plaintextCount, err = repo.VaultCounts(context.Background())
 	if err != nil {
 		t.Fatalf("final vault counts: %v", err)
 	}
@@ -236,4 +237,3 @@ func TestVaultNestedUnopenableSlot(t *testing.T) {
 		t.Fatalf("migration with unopenable slot: %v", err)
 	}
 }
-

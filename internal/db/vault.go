@@ -174,8 +174,8 @@ func (r *Repo) ListConnectionsNeedingSeal(ctx context.Context) ([]ConnectionSeal
 
 // VaultCounts reports how many connections are sealed and how many still hold a
 // plaintext credential, for the dashboard status route.
-func (r *Repo) VaultCounts() (sealed, plaintext int, err error) {
-	rows, err := r.db.Query(`SELECT data, secretCiphertext, tokenCiphertext, refreshCiphertext FROM providerConnections`)
+func (r *Repo) VaultCounts(ctx context.Context) (sealed, plaintext int, err error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT data, secretCiphertext, tokenCiphertext, refreshCiphertext FROM providerConnections`)
 	if err != nil {
 		return 0, 0, fmt.Errorf("vault counts: %w", err)
 	}
@@ -506,6 +506,6 @@ func (r *Repo) sealedPairFor(id string) (sealed [6]string) {
 // and returns the payload to store. Writers call it once the row exists, so a
 // create is insert-then-seal and an update is seal-then-write. A vault-less
 // install gets data back unchanged and issues no statement at all.
-func (r *Repo) sealOnWrite(ctx context.Context, id, data string) (string, error) {
+func (r *Repo) sealOnWrite(id, data string) (string, error) {
 	return r.sealConnectionData(id, data)
 }

@@ -216,6 +216,9 @@ func SetupDashboardRoutes(r chi.Router, repo *db.Repo, chatH *chat.ChatHandler) 
 	r.Delete("/api/provider-nodes/{id}", dashH.HandleDeleteProviderNode)
 	r.Post("/api/provider-nodes/validate", dashH.HandleValidateProviderNode)
 	r.Get("/api/providers/{id}/models", dashH.HandleGetConnectionModels)
+	// Bulk removal of a node's imported models; the single-row form stays at
+	// DELETE /api/models/custom/{key}.
+	r.Delete("/api/providers/{id}/models", dashH.HandleDeleteProviderModels)
 	r.Get("/api/providers/{id}/overrides", dashH.HandleGetProviderOverrides)
 	r.Put("/api/providers/{id}/overrides", dashH.HandleSaveProviderOverrides)
 

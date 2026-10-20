@@ -579,6 +579,7 @@ func applyRawAggregate(resp *UsageStatsResponse, agg *rawAggregate, nodeNameMap,
 		p.CompletionTokens = t.completionTokens
 		p.CachedTokens = t.cachedTokens
 		p.Cost = t.cost
+		p.LastUsed = t.lastUsed
 		resp.ByProvider[key] = p
 	}
 

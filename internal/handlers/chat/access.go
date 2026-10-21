@@ -1,6 +1,9 @@
 package chat
 
 import (
+	"database/sql"
+	"fmt"
+
 	"9router/proxy/internal/db"
 	"9router/proxy/internal/handlerutil"
 	"9router/proxy/internal/log"
@@ -74,8 +77,9 @@ func IsModelNotAllowed(err error) bool {
 // (F-3). An empty result means "no allowlist configured" and allows every
 // model, which is what keeps every key minted before this feature behaving
 // exactly as it did. A nil key (no API-key middleware on the route) also
-// returns empty. A storage failure degrades fail-closed with ErrPolicyUnavailable
-// (503) rather than failing open.
+// returns empty. A storage failure — reading the key's own rows OR the plan it
+// names — degrades fail-closed with ErrPolicyUnavailable (503) rather than
+// failing open: a policy that cannot be evaluated is not a policy that permits (#476).
 func (h *ChatHandler) effectiveAllowedModels(key *models.APIKey) ([]string, error) {
 	if h == nil || key == nil || key.ID == "" {
 		return nil, nil
@@ -89,14 +93,20 @@ func (h *ChatHandler) effectiveAllowedModels(key *models.APIKey) ([]string, erro
 		log.Error("chat", "allowlist read failed, fail-closed", "error", err, "apiKeyId", key.ID)
 		return nil, &ErrPolicyUnavailable{Message: "Policy service temporarily unavailable"}
 	}
-	return h.withPlanPatterns(key.ID, key.PlanID, patterns), nil
+	patterns, err = h.withPlanPatterns(key.ID, key.PlanID, patterns)
+	if err != nil {
+		log.Error("chat", "plan allowlist read failed, fail-closed", "error", err, "apiKeyId", key.ID)
+		return nil, &ErrPolicyUnavailable{Message: "Policy service temporarily unavailable"}
+	}
+	return patterns, nil
 }
 
 // allowedModelPatterns is the same loader for callers that hold a key id
 // rather than the key itself — the capacity-adapter pool filter runs deep in
 // dispatch, long after the request context is gone. It returns nil for an
 // empty id, which modelAllowed reads as "no allowlist". When keyID is non-empty,
-// any repo or storage failure fails closed by returning SentinelDenyAll ("!*").
+// any repo or storage failure — including a plan read, or a planId that names a
+// row which is not there — fails closed by returning SentinelDenyAll ("!*").
 func (h *ChatHandler) allowedModelPatterns(keyID string) []string {
 	if h == nil || keyID == "" {
 		return nil
@@ -110,7 +120,12 @@ func (h *ChatHandler) allowedModelPatterns(keyID string) []string {
 		log.Error("chat", "allowlist read failed, fail-closed", "error", err, "apiKeyId", keyID)
 		return []string{SentinelDenyAll}
 	}
-	return h.withPlanPatterns(keyID, nil, patterns)
+	patterns, err = h.withPlanPatterns(keyID, nil, patterns)
+	if err != nil {
+		log.Error("chat", "plan allowlist read failed, fail-closed", "error", err, "apiKeyId", keyID)
+		return []string{SentinelDenyAll}
+	}
+	return patterns
 }
 
 // withPlanPatterns widens a key's allowlist with the patterns its plan grants.
@@ -125,29 +140,92 @@ func (h *ChatHandler) allowedModelPatterns(keyID string) []string {
 // plan is fetched with one joined query. A caller that already holds the key
 // passes its plan id: an empty one — every key minted before F-3 — skips that
 // query entirely, so the common case pays nothing extra.
-func (h *ChatHandler) withPlanPatterns(keyID string, planID *string, own []string) []string {
-	if h.Repo == nil {
-		return own
+//
+// A plan read that fails returns an error instead of the key's own rows: the
+// union means the plan can only widen a key's access, so dropping a failed plan
+// read would silently remove the plan's grant and, for a key whose restriction
+// lives only in its plan, turn a restricted key into an unrestricted one (#476).
+// The same goes for a planId that names a row which is not there.
+func (h *ChatHandler) withPlanPatterns(keyID string, planID *string, own []string) ([]string, error) {
+	if h == nil || h.Repo == nil {
+		return own, nil
 	}
-	var planPatterns []string
-	if planID != nil && strings.TrimSpace(*planID) != "" {
-		plan, err := h.Repo.GetPlan(strings.TrimSpace(*planID))
-		if err == nil {
-			planPatterns = plan.AllowedModels
-		}
-	} else if planID == nil {
+	var (
+		planPatterns []string
+		err          error
+	)
+	if planID != nil {
+		planPatterns, err = h.planPatternsByID(keyID, strings.TrimSpace(*planID))
+	} else {
 		// The caller holds only a key id, so the plan id is unknown: one joined
 		// read answers it. A caller that passed a known-empty plan id is not
 		// here, so a key with no plan skips this query entirely.
-		plans, err := h.Repo.GetPlansForKeys([]string{keyID})
-		if err == nil {
-			planPatterns = plans[keyID].AllowedModels
-		}
+		planPatterns, err = h.planPatternsByKey(keyID)
+	}
+	if err != nil {
+		return nil, err
 	}
 	if len(planPatterns) == 0 {
-		return own
+		return own, nil
 	}
-	return unionModelPatterns(own, planPatterns)
+	return unionModelPatterns(own, planPatterns), nil
+}
+
+// planPatternsByID reads the plan a key points at, by id.
+//
+// A missing row is NOT treated as "no plan": a key whose planId names a row that
+// is not there is dangling (a plan deleted out of band, a restore, a direct DB
+// edit), and the plan is part of the key's policy, so an unevaluable policy
+// fails closed rather than quietly dropping the plan's grant.
+func (h *ChatHandler) planPatternsByID(keyID, planID string) ([]string, error) {
+	if planID == "" {
+		return nil, nil
+	}
+	plan, err := h.Repo.GetPlan(planID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("plan %q for api key %s is missing: %w", planID, keyID, err)
+		}
+		return nil, fmt.Errorf("plan %q for api key %s: %w", planID, keyID, err)
+	}
+	return plan.AllowedModels, nil
+}
+
+// planPatternsByKey reads the plan for a key id with one joined query.
+//
+// A read failure fails closed for the same reason as above. The join returns no
+// row both for a key with no plan and for a key whose planId is dangling, so when
+// no plan comes back the key's own planId is read to tell the two apart: a
+// non-empty planId with no row behind it is dangling, and that is a failure
+// rather than a missing grant. The extra single-row read only happens on the
+// no-plan path, which is the one that cannot answer the question itself.
+func (h *ChatHandler) planPatternsByKey(keyID string) ([]string, error) {
+	plans, err := h.Repo.GetPlansForKeys([]string{keyID})
+	if err != nil {
+		return nil, fmt.Errorf("plans for api key %s: %w", keyID, err)
+	}
+	plan := plans[keyID]
+	if plan.ID != "" {
+		return plan.AllowedModels, nil
+	}
+	key, err := h.Repo.GetApiKeyByID(keyID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			// No such key: the middleware would have refused the request, and an
+			// unknown key has no policy to evaluate. Treat as no plan.
+			return nil, nil
+		}
+		return nil, fmt.Errorf("api key %s for plan lookup: %w", keyID, err)
+	}
+	if key == nil {
+		// The lookup reports a missing row as a nil key as well as an error, and a
+		// key that is not there has no plan to read.
+		return nil, nil
+	}
+	if key.PlanID != nil && strings.TrimSpace(*key.PlanID) != "" {
+		return nil, fmt.Errorf("plan %q for api key %s is missing: %w", strings.TrimSpace(*key.PlanID), keyID, sql.ErrNoRows)
+	}
+	return nil, nil
 }
 
 // unionModelPatterns merges two allowlists in stable order, dropping

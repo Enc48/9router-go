@@ -1012,6 +1012,21 @@ func isClientCanceled(ctx context.Context, err error) bool {
 	if ctx != nil && ctx.Err() != nil {
 		return true
 	}
+	if err == nil {
+		return false
+	}
+	// A hung-up client surfaces as the transport's own cancellation, not as an
+	// *upstreamError: forwardRequest returns the raw error, which arrives as a
+	// *url.Error wrapping context.Canceled. The request-log call site in usage.go
+	// passes a nil ctx, so the ctx.Err() branch above cannot fire there and the
+	// typed check below is the only signal it has. errors.Is sees through %w
+	// wrapping, so this is the typed equivalent of the check #455 removed — the
+	// string matching ("context canceled", "client closed") is still gone, which
+	// is what stopped an upstream 502 whose body merely mentioned a client abort
+	// from being filed as one (#475).
+	if errors.Is(err, context.Canceled) {
+		return true
+	}
 	var ue *upstreamError
 	if errors.As(err, &ue) && ue.StatusCode == StatusClientClosedRequest {
 		return true

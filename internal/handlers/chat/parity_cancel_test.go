@@ -7,7 +7,9 @@ import (
 )
 
 func TestParityUpstreamCancelIsNotClientAbort(t *testing.T) {
-	for _, err := range []error{context.Canceled, context.DeadlineExceeded,
+	// A plain error whose TEXT claims a client abort is still not one: #455
+	// removed the string matching for exactly that reason.
+	for _, err := range []error{context.DeadlineExceeded,
 		errors.New("upstream: client closed"), errors.New("upstream: broken pipe")} {
 		if isClientCanceled(context.Background(), err) {
 			t.Fatalf("misclassified %v", err)

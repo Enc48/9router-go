@@ -1027,7 +1027,9 @@ func TestCompressMessagesWithConfig_PerBlockPreservation(t *testing.T) {
 			"messages": []any{
 				map[string]any{"role": "tool", "tool_call_id": "c1", "is_error": true, "content": diff},
 				map[string]any{"role": "tool", "tool_call_id": "c2", "name": "Read", "content": diff},
-				map[string]any{"role": "tool", "tool_call_id": "c3", "name": "bash", "content": diff},
+				// A name that is NOT on the protected list: bash is protected now (#477),
+				// so the compression path needs an unprotected tool to exercise.
+				map[string]any{"role": "tool", "tool_call_id": "c3", "name": "cmd", "content": diff},
 			},
 		}
 		in, err := json.Marshal(chatPayload)
@@ -1036,7 +1038,7 @@ func TestCompressMessagesWithConfig_PerBlockPreservation(t *testing.T) {
 		}
 		out, ok := CompressMessagesWithConfig(in, cfg)
 		if !ok {
-			t.Fatal("expected compression for bash block")
+			t.Fatal("expected compression for cmd block")
 		}
 		var res map[string]any
 		if err := json.Unmarshal(out, &res); err != nil {
@@ -1056,7 +1058,7 @@ func TestCompressMessagesWithConfig_PerBlockPreservation(t *testing.T) {
 		if m2["content"].(string) != diff {
 			t.Errorf("expected c2 (Read) to remain uncompressed")
 		}
-		// c3: bash -> compressed
+		// c3: cmd -> compressed
 		m3 := msgs[2].(map[string]any)
 		assertContains(t, m3["content"].(string), "... (")
 	})
@@ -1221,7 +1223,7 @@ func TestCompressMessagesWithConfig_PerBlockPreservation(t *testing.T) {
 	})
 
 	t.Run("Protected tools helper validation", func(t *testing.T) {
-		tools := []string{"Read", "Grep", "Edit", "Write", "patch", "anchor"}
+		tools := []string{"Read", "Grep", "Edit", "Write", "patch", "anchor", "read", "grep", "bash", "glob"}
 		for _, tool := range tools {
 			if !isProtectedTool(tool) {
 				t.Errorf("expected %q to be protected", tool)
@@ -1230,7 +1232,7 @@ func TestCompressMessagesWithConfig_PerBlockPreservation(t *testing.T) {
 				t.Errorf("expected %q with whitespace to be protected", tool)
 			}
 		}
-		unprotected := []string{"bash", "sh", "terminal", "python", "curl"}
+		unprotected := []string{"sh", "terminal", "python", "curl", "cmd"}
 		for _, tool := range unprotected {
 			if isProtectedTool(tool) {
 				t.Errorf("expected %q to be unprotected", tool)

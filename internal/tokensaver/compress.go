@@ -3,7 +3,6 @@ package tokensaver
 import (
 	"encoding/json/jsontext"
 	json "encoding/json/v2"
-	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
@@ -20,30 +19,111 @@ const (
 	TreeMaxLines    = 200
 )
 
+// protectedTools names the tool calls whose output must never be summarised.
+//
+// The keys are lowercase because that is the canonical spelling this repo uses
+// for tool names (internal/translator/fingerprint.go:49 lists
+// {"bash", "glob", "grep", "read"}), and it is the spelling OpenAI-style
+// clients actually send in tool_calls[].function.name. The set is a local
+// hardening on top of upstream RTK, which has no protected-tool concept and
+// only preserves is_error traces: a file the model asked to read must not come
+// back as a summary, because the next turn is issued against it.
+//
+// Every entry is a tool whose result is prose the model needs verbatim: file
+// reads (read, write, edit, patch, multiedit, notebookedit), searches (grep,
+// glob) and the generic shell (bash) that carries cat/sed/git output, plus
+// webfetch and anchor. Anything not listed here is compressed as before.
 var protectedTools = map[string]bool{
-	"Read":   true,
-	"Grep":   true,
-	"Edit":   true,
-	"Write":  true,
-	"patch":  true,
-	"anchor": true,
+	"read":         true,
+	"write":        true,
+	"edit":         true,
+	"multiedit":    true,
+	"notebookedit": true,
+	"patch":        true,
+	"anchor":       true,
+	"grep":         true,
+	"glob":         true,
+	"bash":         true,
+	"webfetch":     true,
 }
 
+// isProtectedTool folds case before the lookup. The list is keyed lowercase and
+// a client may spell the same tool "Read" or "read", so an exact-case map would
+// miss the spelling the repo canonicalises to (#477).
 func isProtectedTool(name string) bool {
-	return protectedTools[strings.TrimSpace(name)]
+	return protectedTools[strings.ToLower(strings.TrimSpace(name))]
 }
+
+// errorResultPrefix recognises an error that is only described in the result
+// text. The OpenAI Chat Completions tool shape has no is_error field at all —
+// a tool result there is {"role":"tool","tool_call_id":…,"content":"…"} — so a
+// detector that only reads typed fields cannot see a failed command (#477).
+// The match is anchored at the start of the content, which is where a failing
+// tool puts its verdict, and it never inspects the middle of a file read.
+var errorResultPrefix = regexp.MustCompile(`(?i)^\s*(?:error|failed|failure|fatal|panic|exception|traceback)\b`)
 
 func isErrorToolResult(m map[string]any) bool {
 	if m == nil {
 		return false
 	}
-	if b, ok := m["is_error"].(bool); ok && b {
+	if truthyToolFlag(m["is_error"]) || truthyToolFlag(m["isError"]) || truthyToolFlag(m["error"]) {
 		return true
 	}
-	if b, ok := m["isError"].(bool); ok && b {
+	if isErrorStatus(m["status"]) {
 		return true
 	}
-	return strings.EqualFold(fmt.Sprintf("%v", m["status"]), "error")
+	if content, ok := m["content"].(string); ok && looksLikeToolError(content) {
+		return true
+	}
+	if contentArr, ok := m["content"].([]any); ok {
+		for _, part := range contentArr {
+			partMap, ok := part.(map[string]any)
+			if !ok {
+				continue
+			}
+			if text, ok := partMap["text"].(string); ok && looksLikeToolError(text) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// truthyToolFlag reads a flag that may arrive as a bool, the string "true" or
+// the number 1: providers serialise booleans all three ways.
+func truthyToolFlag(v any) bool {
+	switch flag := v.(type) {
+	case bool:
+		return flag
+	case string:
+		return strings.EqualFold(strings.TrimSpace(flag), "true")
+	case float64:
+		return flag == 1
+	case int:
+		return flag == 1
+	}
+	return false
+}
+
+// isErrorStatus accepts the word-shaped statuses and any numeric HTTP failure.
+func isErrorStatus(v any) bool {
+	switch status := v.(type) {
+	case string:
+		switch strings.ToLower(strings.TrimSpace(status)) {
+		case "error", "failed", "failure":
+			return true
+		}
+	case float64:
+		return status >= 400
+	case int:
+		return status >= 400
+	}
+	return false
+}
+
+// looksLikeToolError reports whether a tool result opens with an error verdict.
+func looksLikeToolError(content string) bool {
+	return errorResultPrefix.MatchString(content)
 }
 
 func buildToolCallMap(items []map[string]any) map[string]string {

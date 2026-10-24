@@ -241,19 +241,19 @@ func (r *Repo) GetProviderConnections(provider string, activeOnly bool) ([]*mode
 	for rows.Next() {
 		var conn models.ProviderConnection
 		if err := scanConnection(rows.Scan, &conn); err != nil {
-			rows.Close()
+			_ = rows.Close()
 			return nil, err
 		}
 		connections = append(connections, &conn)
 	}
 	if err = rows.Err(); err != nil {
-		rows.Close()
+		_ = rows.Close()
 		return nil, err
 	}
 	// Close the rows BEFORE hydrating: hydrate performs nested queries
 	// (sealedPairFor) that need their own pool connection, and doing that
 	// while this result set is still open can deadlock the pool.
-	rows.Close()
+	_ = rows.Close()
 
 	// A sealed credential is not in the data column, so each row is
 	// hydrated here the way the single-row readers do it. Without this

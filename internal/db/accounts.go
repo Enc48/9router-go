@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	json "encoding/json/v2"
 	"fmt"
@@ -305,7 +306,7 @@ func (r *Repo) ResetProviderHealth(provider, model string) error {
 // GetProviderConnections did: the writer waits for a connection the open
 // rows will never release. Collect first, then write.
 func (r *Repo) listConnectionData(query string, args ...any) ([]struct{ id, data string }, error) {
-	rows, err := r.db.Query(query, args...)
+	rows, err := r.db.QueryContext(context.Background(), query, args...)
 	if err != nil {
 		return nil, err
 	}

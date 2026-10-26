@@ -333,7 +333,12 @@
         },
         thinkingLevels: caps?.thinkingLevels ?? [],
         deprecated: deprecationFor(providerId, r.id) !== null,
-        disabled: false,
+        // The disabledModels KV scope is keyed by the node's storage alias,
+        // which for a compatible node is the node id — the same key the
+        // registered branch uses. The gate itself already hides these rows
+        // from /v1/models (see models_list.go appendConnectionModels); this
+        // flag is what makes them selectable and filterable in the UI.
+        disabled: disabledModelIds.includes(r.id),
         testStatus: compatibleTestResults[r.id],
         latencyMs: compatibleTestLatency[r.id],
         addedAt: r.addedAt,
@@ -341,9 +346,10 @@
     })
   )
 
-  // The list the toolbar filters and the grid renders. Registered providers
-  // include disabled rows so the "Disabled" chip has something to select;
-  // compatible nodes have no disabled concept, so their list is all rows.
+  // The list the toolbar filters and both grids render. Registered providers
+  // and compatible nodes now share the same rule: the full row set is
+  // filtered, and a disabled row stays visible only while the operator is
+  // asking to see disabled or unavailable ones.
   let toolbarRows = $derived<ModelRowView[]>(isCompatibleNode ? compatibleRowViews : registeredRows)
   let filteredRows = $derived(applyModelListFilter(toolbarRows, modelListFilter))
   // The grid iterates in the toolbar's order — a Set would silently fall
@@ -3069,6 +3075,63 @@
   }
 
   /**
+   * Disables every model whose last probe failed or whose account is in
+   * cooldown, in one request.
+   *
+   * The verdicts are already on screen from the sweep that produced them, so
+   * this sends only the failures — the server merges them into the stored
+   * list, which is what keeps two open tabs from disabling each other's
+   * models. "Blocked" counts as dead here: the account is parked and the model
+   * cannot serve until the cooldown lifts, which is the same operator-visible
+   * outcome as a failure. A model that was never probed is not included —
+   * nobody has evidence about it.
+   */
+  async function handleAutoDisableDeadModels() {
+    const pid = providerId
+    const deadIds = isCompatibleNode
+      ? compatibleRows
+          .filter((r) => {
+            const s = compatibleTestResults[r.id]
+            return s === 'error' || s === 'blocked'
+          })
+          .map((r) => r.id)
+      : allAvailableModels
+          .filter((m) => {
+            const s = modelTestStatuses[m.id]
+            return s === 'error' || s === 'blocked'
+          })
+          .map((m) => m.id)
+    if (deadIds.length === 0) {
+      alert('No dead models — every model that was probed either passed or has not been tested yet.')
+      return
+    }
+    const preview = await api
+      .autoDisableModels(storageAlias, deadIds, true)
+      .catch(() => null)
+    const alreadyOff = preview?.alreadyDisabled.length ?? 0
+    const willDisable = preview?.disabled.length ?? deadIds.length
+    const parts = [`Disable ${willDisable} dead model(s)?`]
+    if (alreadyOff > 0) parts.push(`${alreadyOff} already disabled.`)
+    parts.push('They stop appearing in /v1/models and every model picker, and leave the combos they were in.')
+    if (!confirm(parts.join(' '))) return
+
+    try {
+      const res = await api.autoDisableModels(storageAlias, deadIds)
+      if (pid !== providerId) return
+      const modelsData = await fetchProviderModelsData(providerId, storageAlias)
+      disabledModelIds = modelsData.disabledModelIds
+      customModels = modelsData.customModels
+      notifyCustomModelsChanged()
+      selectedModelIds = new Set()
+      const summary = [`${res.disabled.length} disabled`]
+      if (res.alreadyDisabled.length > 0) summary.push(`${res.alreadyDisabled.length} already off`)
+      alert(`${summary.join(', ')}.`)
+    } catch (err) {
+      alert(`Auto-disable failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
+  /**
    * Delete selected: custom models are removed from the store, registry
    * models are static and get disabled instead (the existing single-row
    * rule), and compatible legacy aliases lose their alias. One confirm for
@@ -4160,6 +4223,16 @@
             <span class="material-symbols-outlined text-[16px]">{isRemovingCompatibleModels ? 'progress_activity' : 'delete_sweep'}</span>
             {isRemovingCompatibleModels ? 'Removing...' : 'Remove all models'}
           </button>
+          <button
+            type="button"
+            onclick={handleAutoDisableDeadModels}
+            disabled={compatibleRows.length === 0}
+            title="Disable every model whose last probe failed or whose account is in cooldown. They stop appearing in /v1/models and every model picker, and leave the combos they were in."
+            class="inline-flex h-8 items-center justify-center gap-1.5 rounded-[8px] border border-amber-500/40 bg-amber-500/10 px-3 text-xs font-medium text-amber-600 transition-colors hover:bg-amber-500/20 disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed dark:text-amber-400"
+          >
+            <span class="material-symbols-outlined text-[16px]">heart_broken</span>
+            Disable dead models
+          </button>
         </div>
         <p class="text-xs text-text-muted">Test all sends a real completion per model and consumes account quota.</p>
         <p class="text-xs text-text-muted">Remove all deletes this node's imported models and the aliases pointing at them; models that ship with the build stay.</p>
@@ -4175,18 +4248,17 @@
         <ModelFilterChips
           filter={modelListFilter}
           onChange={(f) => (modelListFilter = f)}
-          showStatus={false}
           {availableCaps}
         />
         <ModelBatchBar
           selection={currentSelection}
           busy={compatibleTestAllRunning}
-          canDisable={false}
+          canDisable
           canDelete={selectedRowsHaveCustom}
           onToggleAll={handleToolbarToggleAll}
           onTest={handleTestSelectedCompatibleModels}
-          onDisable={() => {}}
-          onEnable={() => {}}
+          onDisable={handleDisableSelectedModels}
+          onEnable={handleEnableSelectedModels}
           onDelete={handleDeleteSelectedModels}
           onClear={handleToolbarClearSelection}
         />
@@ -4278,7 +4350,31 @@
                   {#if tStatus && compatibleTestLatency[row.id] !== undefined}
                     <span class="text-xs text-text-muted font-mono">{compatibleTestLatency[row.id]} ms</span>
                   {/if}
+                  <!-- Enable/disable this one row. A disabled row stops being
+                       published by /v1/models and disappears from the pickers,
+                       which is the difference between this and Delete: the row
+                       stays here, reversible, and the import that wrote it is
+                       left alone. -->
+                  <div class="relative group/btn">
+                    <button
+                      type="button"
+                      onclick={() => (row.disabled ? handleEnableModel(row.id) : handleDisableModel(row.id))}
+                      class="p-0.5 rounded text-text-muted transition-colors hover:text-primary cursor-pointer {row.disabled ? 'text-amber-500' : ''}"
+                      title={row.disabled ? 'Enable this model — it returns to /v1/models and the pickers' : 'Disable this model — it stops appearing in /v1/models and the pickers'}
+                    >
+                      <span class="material-symbols-outlined text-sm">{row.disabled ? 'visibility_off' : 'visibility'}</span>
+                    </button>
+                    <span class="pointer-events-none absolute top-5 left-1/2 -translate-x-1/2 text-[10px] text-text-muted whitespace-nowrap opacity-0 group-hover/btn:opacity-100 transition-opacity">
+                      {row.disabled ? 'Disabled — enable' : 'Disable'}
+                    </span>
+                  </div>
                 </div>
+                {#if row.disabled}
+                  <div class="mt-2 flex items-start gap-1.5 text-xs text-amber-600 dark:text-amber-400 bg-amber-500/10 px-2.5 py-1.5 rounded-md border border-amber-500/20">
+                    <span class="material-symbols-outlined text-sm shrink-0 mt-0.5">visibility_off</span>
+                    <span class="font-medium leading-relaxed">Disabled — hidden from <code class="font-mono">/v1/models</code> and every model picker. The row stays here so you can enable it again.</span>
+                  </div>
+                {/if}
                 {#if tError}
                   <div class="mt-2 flex items-start gap-1.5 text-xs text-red-500 bg-red-500/10 px-2.5 py-1.5 rounded-md border border-red-500/20">
                     <span class="material-symbols-outlined text-sm shrink-0 mt-0.5">error</span>
@@ -4610,6 +4706,16 @@
           {isCheckingAll
             ? `Checking ${checkAllProgress.done}/${checkAllProgress.total}...`
             : `Check All Models (${visibleModels.length})`}
+        </button>
+        <button
+          type="button"
+          onclick={handleAutoDisableDeadModels}
+          disabled={isCheckingAll}
+          class="flex w-full items-center justify-center gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 hover:bg-amber-500/20 px-3 py-2 text-xs text-amber-600 transition-colors sm:w-auto cursor-pointer disabled:opacity-50 dark:text-amber-400"
+          title="Disable every model whose last probe failed or whose account is in cooldown. They stop appearing in /v1/models and every model picker, and leave the combos they were in."
+        >
+          <span class="material-symbols-outlined text-sm">heart_broken</span>
+          Disable dead models
         </button>
       {/if}
 

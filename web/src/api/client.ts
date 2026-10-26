@@ -1634,6 +1634,79 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify(modelIds),
     }),
+  /**
+   * Folds a list of dead model ids into the provider's disabled list.
+   *
+   * The merge happens server-side on purpose: the dashboard already holds the
+   * verdicts from its own probes, and sending only the failures avoids a
+   * read-modify-write from the browser — which is how two open tabs disable
+   * each other's models.
+   */
+  autoDisableModels: (provider: string, models: string[], dryRun = false) =>
+    request<{
+      provider: string
+      disabled: string[]
+      alreadyDisabled: string[]
+      total: number
+      dryRun: boolean
+    }>('/api/models/auto-disable', {
+      method: 'POST',
+      body: JSON.stringify({ provider, models, dryRun }),
+    }),
+  /** Reads the model-health configuration, the failure counters and the audit log. */
+  getModelHealth: () =>
+    request<{
+      config: {
+        enabled: boolean
+        intervalMin: number
+        threshold: number
+        scope: 'history' | 'failed'
+        autoEnable: boolean
+      }
+      audit: Array<{
+        provider: string
+        model: string
+        action: 'disabled' | 'enabled'
+        reason?: string
+        actor: 'scheduler' | 'operator'
+        at: string
+      }>
+      failures: Record<
+        string,
+        {
+          count: number
+          lastError?: string
+          lastFailedAt?: string
+          disabledByScheduler?: boolean
+          resetAt?: string
+        }
+      >
+    }>('/api/models/health'),
+  /**
+   * Writes the model-health configuration. The server merges the payload into
+   * the stored value, so a field this client does not send is carried over
+   * rather than reset.
+   */
+  saveModelHealth: (config: {
+    enabled?: boolean
+    intervalMin?: number
+    threshold?: number
+    scope?: 'history' | 'failed'
+    autoEnable?: boolean
+  }) =>
+    request<{
+      status: string
+      config: {
+        enabled: boolean
+        intervalMin: number
+        threshold: number
+        scope: 'history' | 'failed'
+        autoEnable: boolean
+      }
+    }>('/api/models/health', {
+      method: 'PUT',
+      body: JSON.stringify(config),
+    }),
   /** Upstream GET /api/models/alias — full alias map (compatible pages merge custom + legacy rows). */
   getModelAliases: () => request<{ aliases: Record<string, string> }>('/api/models/alias'),
   /** Upstream PUT /api/models/alias {model, alias}. */

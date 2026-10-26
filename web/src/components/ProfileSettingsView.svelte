@@ -1659,10 +1659,8 @@
               </div>
               <Toggle
                 checked={!hiddenNav.includes(entry.id)}
-                disabled={ALWAYS_VISIBLE_NAV_IDS.includes(entry.id)}
-                title={ALWAYS_VISIBLE_NAV_IDS.includes(entry.id)
-                  ? 'Always visible: this is the page the panel lives on'
-                  : ''}
+                disabled={true}
+                title="Visibility is managed per deployment; use the arrows or drag to reorder"
                 size="sm"
                 label="{entry.label} in the sidebar"
                 onChange={(val: boolean) => {

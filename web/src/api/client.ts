@@ -923,6 +923,82 @@ export interface CompressionAnalyticsSummary {
   roiTokensPerMs?: number
   topSavers?: CompressionTopSaver[]
 }
+/** Jailbreak: the default injected document (upstream decolua/9router parity). */
+export interface JailbreakDoc {
+  prompt: string
+  geminiSafety: boolean
+  source?: string
+  /** Instruction-file convention: AGENTS, SOUL, PERSONA, LOAD, … */
+  kind?: string
+  id?: string
+  name?: string
+  /** Models matching one of these rules resolve to this preset. */
+  keywords?: JailbreakKeyword[]
+  /** Models matching one of these rules never get this preset. */
+  excludes?: JailbreakKeyword[]
+  /** Operator arrangement position in the preset list. */
+  order?: number
+  /** RFC3339 UTC stamp the store filled on first write. */
+  createdAt?: string
+  /** RFC3339 UTC stamp of the last write. */
+  updatedAt?: string
+}
+
+/**
+ * One model filter rule, shared by the include and exclude lists.
+ * `mode` is `word` (default, whole token), `partial` (substring) or `regex`.
+ */
+export interface JailbreakKeyword {
+  text: string
+  mode?: string
+}
+
+/** One model's binding: whether injection is armed and which preset it uses. */
+export interface JailbreakModelConfig {
+  enabled: boolean
+  presetId: string
+}
+
+/** The global exclude list: models matching these rules are never injected. */
+export interface JailbreakExcludes {
+  excludes: JailbreakKeyword[]
+}
+
+/** One preset a GitHub import wrote. */
+export interface JailbreakImportEntry {
+  id: string
+  name: string
+  path: string
+  /** Instruction-file convention: AGENTS, SOUL, PERSONA, LOAD, … */
+  kind?: string
+  keywords: string[]
+}
+
+/** One file a GitHub import skipped, with the reason. */
+export interface JailbreakImportRefusal {
+  path: string
+  reason: string
+}
+
+/** The result of importing a prompt collection from GitHub. */
+export interface JailbreakImportResult {
+  ok: boolean
+  source: string
+  imported: JailbreakImportEntry[]
+  refused: JailbreakImportRefusal[]
+}
+
+/** Why one model id resolved (or did not resolve) to a preset. */
+export interface JailbreakMatch {
+  injected: boolean
+  /** global-exclude | exact-binding | keyword | preset-exclude | no-match */
+  reason: string
+  presetId?: string
+  presetName?: string
+  keyword?: string
+  matchedId?: string
+  detail?: string
+}
 
 export function isAuthenticated(): boolean {
   if (typeof window === 'undefined') return false
@@ -1076,10 +1152,12 @@ export class ApiError extends Error {
 }
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const headers = {
-    ...getAuthHeaders(),
-    ...(options.headers as Record<string, string> || {}),
-  }
+  const headers: Record<string, string> = { ...getAuthHeaders() }
+  // A FormData body must carry its own boundary. Forcing application/json here
+  // makes the server fail to parse the upload, so the header is dropped for
+  // exactly that case.
+  if (options.body instanceof FormData) delete headers['Content-Type']
+  Object.assign(headers, (options.headers as Record<string, string>) || {})
   const res = await fetch(path, { ...options, headers })
   if (res.status === 401) {
     handleUnauthorized(path)
@@ -2243,4 +2321,98 @@ export const api = {
     sessionStorage.removeItem('9router_auth')
     localStorage.removeItem('9router_auth')
   },
+  // Jailbreak
+  getJailbreak: () => request<JailbreakDoc>('/api/jailbreak'),
+  saveJailbreak: (doc: {
+    prompt: string
+    geminiSafety: boolean
+    source?: string
+    keywords?: JailbreakKeyword[]
+    excludes?: JailbreakKeyword[]
+  }) =>
+    request<{ success: boolean }>('/api/jailbreak', {
+      method: 'PUT',
+      body: JSON.stringify(doc),
+    }),
+  listJailbreakPresets: () => request<JailbreakDoc[]>('/api/jailbreak/presets'),
+  saveJailbreakPreset: (preset: {
+    id?: string
+    name: string
+    prompt: string
+    geminiSafety: boolean
+    source?: string
+    kind?: string
+    keywords?: JailbreakKeyword[]
+    excludes?: JailbreakKeyword[]
+    order?: number
+  }) =>
+    request<{ success: boolean }>('/api/jailbreak/presets', {
+      method: 'PUT',
+      body: JSON.stringify(preset),
+    }),
+  deleteJailbreakPreset: (id: string) =>
+    request<{ success: boolean }>(`/api/jailbreak/presets/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    }),
+  listJailbreakModels: () => request<Record<string, JailbreakModelConfig>>('/api/jailbreak/models'),
+  setJailbreakModel: (id: string, presetId: string, enabled: boolean) =>
+    request<{ success: boolean }>('/api/jailbreak/models', {
+      method: 'PUT',
+      body: JSON.stringify({ id, presetId, enabled }),
+    }),
+  deleteJailbreakModel: (id: string) =>
+    request<{ ok: boolean; id: string }>('/api/jailbreak/models', {
+      method: 'DELETE',
+      body: JSON.stringify({ id }),
+    }),
+  getJailbreakExcludes: () => request<JailbreakExcludes>('/api/jailbreak/excludes'),
+  saveJailbreakExcludes: (excludes: JailbreakKeyword[]) =>
+    request<JailbreakExcludes>('/api/jailbreak/excludes', {
+      method: 'PUT',
+      body: JSON.stringify({ excludes }),
+    }),
+  importJailbreak: (target: string, name?: string) =>
+    request<JailbreakImportResult>('/api/jailbreak/import', {
+      method: 'POST',
+      body: JSON.stringify({ target, name: name || undefined }),
+    }),
+  uploadJailbreakPreset: (file: File) => {
+    const form = new FormData()
+    form.append('file', file)
+    return request<{ ok: boolean; preset: JailbreakImportEntry }>(
+      '/api/jailbreak/presets/upload',
+      { method: 'POST', body: form },
+    )
+  },
+  previewJailbreak: (id: string, messages: { role: string; content: string }[]) =>
+    request<{
+      injected: boolean
+      reason: string
+      presetId?: string
+      presetName?: string
+      prompt?: string
+      messages: { role: string; content: string }[]
+    }>('/api/jailbreak/preview', {
+      method: 'POST',
+      body: JSON.stringify({ id, messages }),
+    }),
+  reorderJailbreakPresets: (order: string[]) =>
+    request<{ ok: boolean }>('/api/jailbreak/presets/order', {
+      method: 'PUT',
+      body: JSON.stringify({ order }),
+    }),
+  getJailbreakModelCatalog: () =>
+    request<{ models: string[] }>('/api/jailbreak/models/catalog'),
+  getJailbreakUsage: () =>
+    request<{ usage: Record<string, number> }>('/api/jailbreak/usage'),
+  explainJailbreak: (id: string) =>
+    request<JailbreakMatch>('/api/jailbreak/resolve', {
+      method: 'POST',
+      body: JSON.stringify({ id }),
+    }),
+  duplicateJailbreakPreset: (id: string, newId?: string) =>
+    request<{ ok: boolean; preset: JailbreakDoc }>(`/api/jailbreak/presets/${encodeURIComponent(id)}/duplicate`, {
+      method: 'POST',
+      body: JSON.stringify({ id: newId || '' }),
+    }),
 }

@@ -675,6 +675,13 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 	// the call itself is unconditional on non-Claude lanes.
 	if !upstreamClaude {
 		pipedBody = executor.InjectReasoningContent(pipedBody, provider)
+		if provider == "deepseek" {
+			// DeepSeek V4 models think by default and reject required/named
+			// tool_choice while thinking is on ("Thinking mode does not
+			// support this tool_choice"); downgrade the pin to auto so the
+			// turn is served instead of failing with 400.
+			pipedBody = executor.NormalizeDeepSeekThinkingToolChoice(pipedBody)
+		}
 	}
 
 	// Fit tool names exceeding MaxToolNameLength (64 chars) to prevent upstream HTTP 400.

@@ -355,6 +355,8 @@
         bind:version={systemVersion}
         hiddenNav={hiddenNav}
         navOrder={navOrder}
+        brandName={settings.appName || ''}
+        brandLogo={settings.appLogoUrl || ''}
       />
     </div>
 

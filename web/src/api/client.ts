@@ -231,6 +231,8 @@ export interface ProviderStrategyConfig {
 }
 
 export interface Settings {
+  appName?: string
+  appLogoUrl?: string
   requireApiKey?: boolean
   tunnelDashboardAccess?: boolean
   rtkEnabled?: boolean
@@ -1854,6 +1856,29 @@ export const api = {
       body: JSON.stringify({ code, codeVerifier }),
     }),
   getSystemVersion: () => request<SystemVersionInfo>('/api/version'),
+  /**
+   * Uploads the white-label logo as multipart/form-data. The body is a
+   * FormData rather than JSON, so it is posted directly instead of through
+   * `request`, which always serializes its options as JSON.
+   *
+   * The auth header is sent without `Content-Type`: fetch sets that itself
+   * for a FormData body, together with the multipart boundary. A manually
+   * set `application/json` here would override it and leave the server
+   * parsing a multipart body as JSON.
+   */
+  uploadLogo: async (file: File): Promise<{ status: string; appLogoUrl: string }> => {
+    const token = getStoredAPIKey()
+    const body = new FormData()
+    body.append('file', file)
+    const res = await fetch('/api/settings/logo', {
+      method: 'POST',
+      ...(token ? { headers: { Authorization: `Bearer ${token}` } } : {}),
+      body,
+    })
+    if (res.status === 401) handleUnauthorized('/api/settings/logo')
+    if (!res.ok) throw new ApiError(await responseErrorMessage(res), res.status)
+    return res.json()
+  },
   checkUpdate: () => request<SystemVersionInfo>('/api/version/check'),
   triggerUpdate: () =>
     request<{ status: string; message?: string; version?: string }>('/api/version/update', {

@@ -99,6 +99,11 @@
   let enableSystemPrompt = $state(false)
   let systemPromptPrefix = $state('')
   let systemPromptSuffix = $state('')
+  let appName = $state('')
+  let appLogoUrl = $state('')
+  let isUploadingLogo = $state(false)
+  let logoUploadError = $state('')
+  let logoFileInput = $state<HTMLInputElement | null>(null)
 
   const ANTI_POISONING_PRESET =
     '[CRITICAL CODE INTEGRITY & ANTI-POISONING RULE]\n' +
@@ -332,6 +337,8 @@
         enableSystemPrompt = !!s.systemPromptEnabled
         if (typeof s.systemPromptPrefix === 'string') systemPromptPrefix = s.systemPromptPrefix
         if (typeof s.systemPromptSuffix === 'string') systemPromptSuffix = s.systemPromptSuffix
+        if (typeof s.appName === 'string') appName = s.appName
+        if (typeof s.appLogoUrl === 'string') appLogoUrl = s.appLogoUrl
 
         if (s.authMode === 'oidc' || s.authMode === 'saml') authMode = s.authMode
         if (s.oidcIssuerUrl) oidcIssuerUrl = String(s.oidcIssuerUrl)
@@ -459,6 +466,31 @@
     }
   }
 
+  /** Uploads the white-label logo and adopts the URL the gateway stored it
+      under. The upload writes appLogoUrl on the server, so the field is
+      refreshed from the response rather than guessed here. */
+  async function uploadLogoFile(file: File) {
+    isUploadingLogo = true
+    logoUploadError = ''
+    try {
+      const res = await api.uploadLogo(file)
+      appLogoUrl = res.appLogoUrl
+      onRefresh?.()
+    } catch (err) {
+      logoUploadError = err instanceof Error ? err.message : String(err)
+    } finally {
+      isUploadingLogo = false
+    }
+  }
+  /** Reads the picked file off the input and clears it afterwards, so choosing
+      the same file twice in a row fires change again. The File is captured
+      before the reset: clearing the input drops its files list. */
+  function handleLogoFileSelected(e: Event) {
+    const input = e.target as HTMLInputElement
+    const file = input.files?.[0]
+    input.value = ''
+    if (file) uploadLogoFile(file)
+  }
   async function handleSaveAll() {
     isSavingSettings = true
     saveSuccess = false
@@ -478,6 +510,8 @@
         systemPromptEnabled: enableSystemPrompt,
         systemPromptPrefix,
         systemPromptSuffix,
+        appName: appName.trim(),
+        appLogoUrl: appLogoUrl.trim(),
         authMode,
         oidcIssuerUrl,
         oidcClientId,
@@ -1305,6 +1339,59 @@
           ></textarea>
         </div>
       </div>
+    </Card>
+    <!-- SECTION: White-label branding. The sidebar renders these two values, so
+         the card is the only place the product name and logo are set. An empty
+         value falls back to the project defaults, which is what an operator who
+         never opens this card keeps. -->
+    <Card padding="md" class="space-y-4">
+      <div class="flex items-center gap-2 pb-2 border-b border-border">
+        <Sliders class="w-4 h-4 text-brand-500" />
+        <h2 class="text-sm font-bold text-text-main">White-label branding</h2>
+      </div>
+      <p class="text-xs text-text-muted">
+        Customize the name and logo shown in the dashboard sidebar. Leave blank to use the 9router-go defaults.
+      </p>
+      <label class="block space-y-1">
+        <span class="text-xs font-medium text-text-main">Application name</span>
+        <Input bind:value={appName} placeholder="9router-go" />
+      </label>
+      <label class="block space-y-1">
+        <span class="text-xs font-medium text-text-main">Logo URL</span>
+        <Input bind:value={appLogoUrl} placeholder="https://example.com/logo.png" />
+        <span class="text-[11px] text-text-subtle">An HTTPS URL, or a local absolute path such as /logo.png</span>
+      </label>
+      <!-- Upload writes the file into the gateway's own data directory and
+           rewrites the URL above, so an operator with no public host still
+           gets a branded sidebar: the <img> points at this gateway. -->
+      <div class="flex items-center gap-2">
+        <input
+          type="file"
+          accept=".png,.svg,.webp,.jpg,.jpeg,image/png,image/svg+xml,image/webp,image/jpeg"
+          bind:this={logoFileInput}
+          onchange={handleLogoFileSelected}
+          class="hidden"
+        />
+        <button
+          type="button"
+          class="inline-flex items-center gap-1.5 rounded-lg border border-border-subtle bg-surface-2 px-3 py-2 text-xs font-medium text-text-main transition-colors hover:border-brand-500/40 disabled:opacity-50"
+          disabled={isUploadingLogo}
+          onclick={() => logoFileInput?.click()}
+        >
+          <Upload class="h-3.5 w-3.5" />
+          {isUploadingLogo ? 'Uploading…' : 'Upload image'}
+        </button>
+        <span class="text-[11px] text-text-subtle">PNG, SVG, WebP or JPEG · max 2 MB</span>
+      </div>
+      {#if logoUploadError}
+        <p class="text-[11px] font-medium text-error">{logoUploadError}</p>
+      {/if}
+      {#if appLogoUrl}
+        <div class="flex items-center gap-3 rounded-lg bg-surface-2 p-3">
+          <img src={appLogoUrl} alt="Logo preview" class="h-10 w-10 rounded object-contain" />
+          <span class="text-xs text-text-muted">Preview</span>
+        </div>
+      {/if}
     </Card>
     <!-- SECTION: Display. Unit abbreviation, the usage-detail default, an
          advanced-settings disclosure that unfolds the currency rates, the

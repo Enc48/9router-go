@@ -334,6 +334,9 @@ func SetupDashboardRoutes(r chi.Router, repo *db.Repo, chatH *chat.ChatHandler) 
 	r.Post("/api/settings/database/prune-usage", dashH.HandlePruneUsageHistory)
 	r.Post("/api/settings/database/vacuum", dashH.HandleVacuumDatabase)
 	r.Post("/api/settings/proxy-test", dashH.HandleProxyTest)
+	// White-label logo upload: the file lands under DATA_DIR/uploads and
+	// appLogoUrl is rewritten to the path this gateway serves it from.
+	r.Post("/api/settings/logo", dashH.HandleUploadLogo)
 
 	// Currency rates (profile page): reads live USD rates for the catalog codes
 	// and stores the subset the display uses.
@@ -507,6 +510,13 @@ func SetupServerRouter(r chi.Router, repo *db.Repo, ts *TokenSaverConfig) *chat.
 	if versionH != nil {
 		dashH.SemanticCache = versionH.SemanticCache
 	}
+	// Operator-supplied dashboard assets (the white-label logo). Behind the
+	// same page gate as /dashboard/*, so an install that requires a login does
+	// not serve its branding to an anonymous caller.
+	r.Group(func(r chi.Router) {
+		r.Use(middleware.RequireDashboardPage(repo))
+		r.Get("/uploads/*", dashH.HandleServeUploads)
+	})
 	r.Get("/api/auth/status", dashH.HandleAuthStatus)
 	r.Post("/api/auth/login", dashH.HandleAuthLogin)
 	r.Post("/api/auth/logout", dashH.HandleAuthLogout)

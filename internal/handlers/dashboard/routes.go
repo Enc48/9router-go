@@ -159,6 +159,9 @@ func RegisterRoutes(r chi.Router, h *DashboardHandler) {
 		r.Post("/settings/database/prune-usage", h.HandlePruneUsageHistory)
 		r.Post("/settings/database/vacuum", h.HandleVacuumDatabase)
 		r.Post("/settings/proxy-test", h.HandleProxyTest)
+		// White-label logo upload: the file lands under DATA_DIR/uploads and
+		// appLogoUrl is rewritten to the path this gateway serves it from.
+		r.Post("/settings/logo", h.HandleUploadLogo)
 		r.Post("/settings/currency/refresh", h.HandleRefreshCurrencyRates)
 
 		// Token Saver Testing Benches
@@ -190,4 +193,11 @@ func RegisterRoutes(r chi.Router, h *DashboardHandler) {
 		// Compression Analytics
 		r.Get("/analytics/compression", h.HandleGetCompressionAnalytics)
 	})
+	// Operator-supplied dashboard assets (the white-label logo). Registered
+	// here as well as in SetupServerRouter because that table is mounted by
+	// tests only: a route added there alone is reachable in a unit test and
+	// 404s on the real server, which is how the upload half was nearly
+	// shipped. The page gate that guards it in production is applied by
+	// SetupServerRouter, not here — the test router has no session to present.
+	r.Get("/uploads/*", h.HandleServeUploads)
 }

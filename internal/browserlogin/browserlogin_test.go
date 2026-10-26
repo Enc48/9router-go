@@ -111,3 +111,54 @@ func TestReadSessionNeedsBothSessionCookies(t *testing.T) {
 		t.Error("readSession() accepted a browser it could not reach")
 	}
 }
+
+// resolveDisplayEnv fills in the user session's display when the process
+// environment has none: a gateway started by a service manager has no
+// DISPLAY/WAYLAND_DISPLAY, but a browser can still open a window if it is
+// handed the socket the session actually listens on.
+func TestResolveDisplayEnvFillsWayland(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("session sockets are a unix concept")
+	}
+	t.Setenv("DISPLAY", "")
+	t.Setenv("WAYLAND_DISPLAY", "")
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "wayland-0"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_RUNTIME_DIR", dir)
+
+	for _, v := range resolveDisplayEnv() {
+		if v == "WAYLAND_DISPLAY=wayland-0" {
+			return
+		}
+	}
+	t.Error("the fallback WAYLAND_DISPLAY is missing from the resolved env")
+}
+
+func TestResolveDisplayEnvKeepsExistingDisplay(t *testing.T) {
+	t.Setenv("DISPLAY", ":9")
+	t.Setenv("WAYLAND_DISPLAY", "")
+
+	for _, v := range resolveDisplayEnv() {
+		if v == "DISPLAY=:9" {
+			return
+		}
+	}
+	t.Error("an existing DISPLAY must be preserved")
+}
+
+func TestResolveDisplayEnvAdvertisesNoMissingSocket(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("session sockets are a unix concept")
+	}
+	t.Setenv("DISPLAY", "")
+	t.Setenv("WAYLAND_DISPLAY", "")
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+
+	for _, v := range resolveDisplayEnv() {
+		if v == "WAYLAND_DISPLAY=wayland-0" || v == "WAYLAND_DISPLAY=wayland-1" {
+			t.Errorf("a socket that does not exist must not be advertised: %q", v)
+		}
+	}
+}

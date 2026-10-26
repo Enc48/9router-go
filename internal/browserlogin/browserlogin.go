@@ -26,12 +26,41 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
 )
+
+// resolveDisplayEnv returns the environment a browser launch needs, with the
+// user session's display filled in when the process environment lacks one.
+//
+// A gateway started by a service manager (systemd, a supervisor) often has
+// no DISPLAY or WAYLAND_DISPLAY even when the machine is a desktop with a
+// live session. The session socket is discoverable, and a browser handed it
+// can open a real window the operator can sign in to.
+func resolveDisplayEnv() []string {
+	env := os.Environ()
+	if runtime.GOOS != "linux" || os.Getenv("DISPLAY") != "" || os.Getenv("WAYLAND_DISPLAY") != "" {
+		return env
+	}
+	runtimeDir := os.Getenv("XDG_RUNTIME_DIR")
+	for _, name := range []string{"wayland-1", "wayland-0"} {
+		if runtimeDir != "" {
+			if _, err := os.Stat(filepath.Join(runtimeDir, name)); err == nil {
+				return append(env, "WAYLAND_DISPLAY="+name)
+			}
+		}
+	}
+	for i := 0; i <= 1; i++ {
+		if _, err := os.Stat(fmt.Sprintf("/tmp/.X11-unix/X%d", i)); err == nil {
+			return append(env, fmt.Sprintf("DISPLAY=:%d", i))
+		}
+	}
+	return env
+}
 
 // GeminiAppURL is the page a sign-in has to reach for the session to be
 // established.
@@ -163,6 +192,7 @@ func Run(ctx context.Context) (*Result, error) {
 		"--new-window",
 		GeminiAppURL,
 	)
+	command.Env = resolveDisplayEnv()
 	if err := command.Start(); err != nil {
 		return nil, fmt.Errorf("open the browser: %w", err)
 	}

@@ -121,6 +121,7 @@ func RunDeepSeek(ctx context.Context) (*DeepSeekResult, error) {
 		"--new-window",
 		DeepSeekAppURL,
 	)
+	command.Env = resolveDisplayEnv()
 	if err := command.Start(); err != nil {
 		return nil, fmt.Errorf("open the browser: %w", err)
 	}

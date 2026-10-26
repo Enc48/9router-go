@@ -418,6 +418,29 @@ func modelEntryCaps(modelEntry string) providers.Capabilities {
 	return providers.GetCapabilitiesForModel(provider, model)
 }
 
+// comboRespectsStoredOrder reports whether this combo asked to skip the
+// rotation strategy and walk its stored model list in order. The flag lives in
+// the combo's own strategy row (settings.comboStrategies[name]) so it can
+// differ per combo, the same place smartPolicy and sessionSticky live.
+//
+// A settings read that fails is treated as "not set" rather than as an error:
+// the caller is mid-request with a combo to route, and the rotation strategy
+// is the behaviour every combo had before the flag existed.
+func (h *ChatHandler) comboRespectsStoredOrder(comboName string) bool {
+	if h.Repo == nil || comboName == "" {
+		return false
+	}
+	settings, err := h.Repo.GetSettings()
+	if err != nil || settings == nil {
+		return false
+	}
+	cfg, ok := settings.ComboStrategies[comboName]
+	if !ok {
+		return false
+	}
+	return cfg.RespectStoredOrder
+}
+
 // ApplyComboStrategy rotates the array of models based on the selected strategy.
 // It treats every call as a new turn (backward-compatible wrapper).
 func (h *ChatHandler) ApplyComboStrategy(strategy string, models []string, comboName string, stickyLimit int) []string {
@@ -535,9 +558,17 @@ func (h *ChatHandler) handleComboFallback(ctx context.Context, w http.ResponseWr
 	// 1. Apply combo rotation strategy first. The smart strategy orders the
 	// models itself (System One evaluation + session stickiness) and carries
 	// its routing state on the context for the failure loop below.
+	//
+	// RespectStoredOrder skips the rotation and walks the stored list as-is,
+	// so the order the operator arranged in the editor is the fallback chain.
+	// The smart strategy is exempt: it orders the models itself and already
+	// keeps the combo's own order on every failure path, so honouring the flag
+	// there would fight the evaluation it exists to perform.
 	var models []string
 	if strategy == "smart" {
 		ctx, models = h.applySmartRouting(ctx, body, comboModels, comboName)
+	} else if h.comboRespectsStoredOrder(comboName) {
+		models = slices.Clone(comboModels)
 	} else {
 		models = h.applyComboStrategy(strategy, comboModels, comboName, stickyLimit, detectNewTurn(body))
 	}
@@ -846,6 +877,8 @@ func (h *ChatHandler) handleMessagesComboFallback(ctx context.Context, w http.Re
 	var models []string
 	if strategy == "smart" {
 		ctx, models = h.applySmartRouting(ctx, bodyJSON, comboModels, comboName)
+	} else if h.comboRespectsStoredOrder(comboName) {
+		models = slices.Clone(comboModels)
 	} else {
 		models = h.applyComboStrategy(strategy, comboModels, comboName, stickyLimit, detectNewTurn(bodyJSON))
 	}

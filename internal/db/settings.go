@@ -24,6 +24,15 @@ type ComboStrategy struct {
 	// RouterModel overrides the System One model that evaluates the route
 	// (default oc/jev-1.13-free).
 	RouterModel string `json:"routerModel,omitempty"`
+	// RespectStoredOrder skips the rotation strategy and walks the combo's
+	// stored model list in order, so the ordering the operator arranged in the
+	// editor is the fallback chain the gateway tries. It does NOT skip
+	// ReorderByCapabilities: a request that needs vision must still float a
+	// capable model to the front, or the chain would offer a text-only model
+	// and fail. The "smart" strategy always orders the models itself (System
+	// One evaluation plus session stickiness) and keeps the combo's own order
+	// on every failure path, so this flag is a no-op there.
+	RespectStoredOrder bool `json:"respectStoredOrder,omitempty"`
 }
 
 // ProviderStrategy defines routing and proxy pool options for a specific
@@ -360,6 +369,12 @@ func (r *Repo) GetSettings() (*SettingsData, error) {
 					entry.ConfidenceThreshold = &ct
 				}
 				entry.RouterModel = handlerutil.GetString(vm, "routerModel")
+				// An absent flag reads as false, which is the behaviour every
+				// combo had before the flag existed: rotation stays on unless
+				// the operator turned it off for this combo.
+				if rso, ok := vm["respectStoredOrder"].(bool); ok {
+					entry.RespectStoredOrder = rso
+				}
 				s.ComboStrategies[k] = entry
 			}
 		}

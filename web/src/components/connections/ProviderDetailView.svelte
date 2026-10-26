@@ -85,6 +85,8 @@
   import { nodeLimitsDraftOf, nodeLimitsSummary, nodeLimitsUsageSummary } from '../../lib/node-limits'
   import type { ProviderNodeLimitsPatch } from '../../api/client'
   import Badge from '../../lib/ui/Badge.svelte'
+  import Toggle from '../../lib/ui/Toggle.svelte'
+  import { PauseCircle } from 'lucide-svelte'
   import ProviderHeaderOverridesModal from './ProviderHeaderOverridesModal.svelte'
   import EditCompatibleNodeModal from './EditCompatibleNodeModal.svelte'
   import FreebuffSessionBanner from './FreebuffSessionBanner.svelte'
@@ -203,6 +205,21 @@
       .filter((c) => c.provider === providerId)
       .sort((a, b) => (a.priority ?? 999999) - (b.priority ?? 999999))
   )
+  let isProviderAllDisabled = $derived(
+    providerConnections.length > 0 && providerConnections.every((c) => c.isActive === 0)
+  )
+  let isProviderActive = $derived(providerConnections.some((c) => c.isActive === 1))
+
+  async function handleToggleProvider(targetActive: boolean) {
+    try {
+      await Promise.allSettled(
+        providerConnections.map((c) => api.updateConnection(c.id, { isActive: targetActive ? 1 : 0 }))
+      )
+      onRefresh()
+    } catch (err) {
+      alert(`Toggle provider failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
   // Upstream parity: compatible-node detection drives the details card,
   // bottom Add button, models section, and edit-node modal.
   let isOpenAICompatibleNode = $derived(!!selectedNode && selectedNode.type === 'openai-compatible')
@@ -3180,7 +3197,7 @@
       Back to Providers
     </button>
 
-    <div class="flex min-w-0 items-center gap-3 sm:gap-4">
+    <div class="flex min-w-0 items-center justify-between gap-3 sm:gap-4">
       <div
         class="flex size-12 shrink-0 items-center justify-center rounded-lg"
         style="background-color: {providerColor}15;"
@@ -3210,10 +3227,31 @@
             </a>
           {/if}
         </div>
-        <p class="text-text-muted">
-          {providerConnections.length} connection{providerConnections.length === 1 ? '' : 's'}
-        </p>
+        <div class="flex items-center gap-2 flex-wrap">
+          <p class="text-text-muted">
+            {providerConnections.length} connection{providerConnections.length === 1 ? '' : 's'}
+          </p>
+          {#if isProviderAllDisabled}
+            <Badge variant="default" size="sm">
+              <span class="flex items-center gap-1">
+                <PauseCircle class="w-3 h-3" />
+                Disabled
+              </span>
+            </Badge>
+          {/if}
+        </div>
       </div>
+
+      {#if providerConnections.length > 0}
+        <div class="flex shrink-0 items-center gap-2 self-center ml-auto">
+          <Toggle
+            size="sm"
+            checked={isProviderActive}
+            onChange={handleToggleProvider}
+            title={isProviderActive ? 'Disable all connections for this provider' : 'Enable all connections for this provider'}
+          />
+        </div>
+      {/if}
     </div>
   </div>
 

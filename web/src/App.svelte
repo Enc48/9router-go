@@ -41,6 +41,7 @@
   import { isNavHidden, normalizeHiddenNav, normalizeNavOrder } from './lib/nav'
   import { setHiddenNavEntries } from './lib/navVisibility.svelte'
   import { setDisplayCurrency } from './lib/currency.svelte'
+  import { applyAnimationLevel } from './lib/displayPrefs'
 
   let activeTab = $state<ActiveTab>(
     typeof window !== 'undefined' ? pathToTab(window.location.pathname) : 'endpoint'
@@ -185,6 +186,7 @@
   }
 
   onMount(() => {
+    applyAnimationLevel()
     const unsubscribeUnauthorized = onUnauthorized(() => {
       isAuthenticatedState = false
       requireLogin = true

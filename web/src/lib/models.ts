@@ -1737,6 +1737,10 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
       "name": "DeepSeek V4 Flash Vision (Exp)"
     },
     {
+      "id": "deepseek-flash",
+      "name": "DeepSeek Flash"
+    },
+    {
       "id": "deepseek-chat",
       "name": "DeepSeek V3.2 Chat"
     },

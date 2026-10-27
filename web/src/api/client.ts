@@ -149,6 +149,8 @@ export interface APIKey {
   metadata?: string
   /** Plan template this key inherits from. Empty means no plan. */
   planId?: string
+  /** Flat scope grants, e.g. ['routing:cli_mapping']. Empty means none. */
+  scopes?: string[]
 }
 
 export interface APIKeyPolicy {
@@ -165,6 +167,47 @@ export interface APIKeyPolicy {
   name?: string
   /** Plan template to inherit. An empty string detaches the key. */
   planId?: string
+  /** Scope grants. An omitted field leaves stored scopes alone. */
+  scopes?: string[]
+}
+
+/** One CLI tool that supports remote model mapping. */
+export interface CliToolInfo {
+  id: string
+  name: string
+  /** Pipe-separated User-Agent prefixes that identify the tool, e.g. 'claude-cli/|claude-code/'. */
+  userAgent: string
+  defaultSlot: string
+}
+
+/** One slot → target-model route for a (tool, apiKey) bucket. */
+export interface CliToolMapping {
+  id: string
+  toolId: string
+  apiKeyId: string
+  slotKey: string
+  targetModel: string
+  sourceModel?: string
+  enabled: number
+  createdAt?: string
+  updatedAt?: string
+}
+
+export interface CliToolMappingInput {
+  toolId: string
+  apiKeyId: string
+  slotKey: string
+  targetModel: string
+  sourceModel?: string
+  enabled?: boolean
+}
+
+/** Per-(key, tool) switch that turns a bucket's mappings on or off. */
+export interface CliToolSettings {
+  apiKeyId: string
+  toolId: string
+  mappingsEnabled: boolean
+  mode: 'remote' | 'local'
 }
 
 /** A reusable policy template (F-3). Keys inherit its limits as defaults. */
@@ -1540,6 +1583,36 @@ export const api = {
     request<{ id: string; models: string[] }>(`/api/keys/${encodeURIComponent(id)}/models`, {
       method: 'PUT',
       body: JSON.stringify({ models }),
+    }),
+
+  // CLI tool model mapping: per-key slot → model routes (Cartethyia port).
+  getCliTools: () => request<{ tools: CliToolInfo[] }>('/api/cli-tools'),
+  getCliToolMappings: (apiKeyId: string, toolId: string) =>
+    request<{ mappings: CliToolMapping[] }>(
+      `/api/cli-tools/mappings?keyId=${encodeURIComponent(apiKeyId)}&toolId=${encodeURIComponent(toolId)}`
+    ),
+  getAllCliToolMappings: (apiKeyId: string) =>
+    request<{ mappings: CliToolMapping[] }>(`/api/cli-tools/mappings-all?keyId=${encodeURIComponent(apiKeyId)}`),
+  saveCliToolMapping: (m: CliToolMappingInput) =>
+    request<{ success: boolean }>('/api/cli-tools/mappings', {
+      method: 'POST',
+      body: JSON.stringify({ ...m, enabled: m.enabled === false ? 0 : 1 }),
+    }),
+  deleteCliToolMapping: (id: string) =>
+    request<{ success: boolean }>(`/api/cli-tools/mappings?id=${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  getCliToolSettings: (apiKeyId: string, toolId: string) =>
+    request<{ settings: CliToolSettings | null }>(
+      `/api/cli-tools/settings?keyId=${encodeURIComponent(apiKeyId)}&toolId=${encodeURIComponent(toolId)}`
+    ),
+  setCliToolSettings: (s: { apiKeyId: string; toolId: string; mappingsEnabled: boolean; mode?: string }) =>
+    request<{ success: boolean }>('/api/cli-tools/settings', {
+      method: 'POST',
+      body: JSON.stringify({
+        apiKeyId: s.apiKeyId,
+        toolId: s.toolId,
+        mappingsEnabled: s.mappingsEnabled ? 1 : 0,
+        mode: s.mode || 'remote',
+      }),
     }),
 
   // F-3 plan templates: the reusable policy a key inherits from.

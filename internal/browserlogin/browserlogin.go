@@ -62,6 +62,24 @@ func resolveDisplayEnv() []string {
 	return env
 }
 
+// envNamesDisplay reports whether an environment can open a window: it names
+// a display with a non-empty value. This is what the launch gate decides on,
+// not os.Getenv — a gateway started by a service manager has neither variable
+// set, yet resolveDisplayEnv can still discover the session's socket, and
+// refusing the launch before that discovery runs is what made the browser
+// refuse to open on a desktop with a live session.
+func envNamesDisplay(env []string) bool {
+	for _, entry := range env {
+		if entry == "DISPLAY=" || entry == "WAYLAND_DISPLAY=" {
+			continue
+		}
+		if strings.HasPrefix(entry, "DISPLAY=") || strings.HasPrefix(entry, "WAYLAND_DISPLAY=") {
+			return true
+		}
+	}
+	return false
+}
+
 // GeminiAppURL is the page a sign-in has to reach for the session to be
 // established.
 const GeminiAppURL = "https://gemini.google.com/app"
@@ -165,7 +183,12 @@ func Run(ctx context.Context) (*Result, error) {
 	if binary == "" {
 		return nil, ErrNoBrowser
 	}
-	if runtime.GOOS == "linux" && os.Getenv("DISPLAY") == "" && os.Getenv("WAYLAND_DISPLAY") == "" {
+	// The gate reads the resolved environment, not the process environment: a
+	// gateway started by a service manager has neither display variable set,
+	// but the session's socket is discoverable and the browser can still open
+	// a window on the operator's desktop.
+	displayEnv := resolveDisplayEnv()
+	if runtime.GOOS == "linux" && !envNamesDisplay(displayEnv) {
 		return nil, errors.New("this machine has no display, so the browser cannot be opened; " +
 			"use an Incognito window instead and paste the cookie header")
 	}
@@ -192,7 +215,7 @@ func Run(ctx context.Context) (*Result, error) {
 		"--new-window",
 		GeminiAppURL,
 	)
-	command.Env = resolveDisplayEnv()
+	command.Env = displayEnv
 	if err := command.Start(); err != nil {
 		return nil, fmt.Errorf("open the browser: %w", err)
 	}

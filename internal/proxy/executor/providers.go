@@ -13,7 +13,6 @@ import (
 	"math"
 	"net/http"
 	"os"
-	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -419,8 +418,35 @@ func buildCommandcodeBody(body []byte, model string) ([]byte, error) {
 		return body, err
 	}
 
-	// If already wrapped in params, ensure required top-level fields
-	if _, hasParams := m["params"]; hasParams {
+	// If already wrapped in params, keep the native envelope but re-derive
+	// the fields the gateway owns. A client-supplied params object is a
+	// request to the provider, so it goes through the same whitelist the
+	// flat path builds: without it a client could set the model or any
+	// parameter the provider accepts.
+	if rawParams, hasParams := m["params"]; hasParams {
+		p, ok := rawParams.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("buildCommandcodeBody: params must be an object")
+		}
+		params := map[string]any{}
+		for _, k := range []string{"messages", "stream", "temperature", "top_p", "tools", "reasoning_effort", "system"} {
+			if v, ok := p[k]; ok && v != nil {
+				params[k] = v
+			}
+		}
+		if _, ok := params["stream"]; !ok {
+			params["stream"] = true
+		}
+		if _, ok := params["messages"]; !ok {
+			params["messages"] = []any{}
+		}
+		// The model is the gateway's to decide: the client asked for a
+		// model, the gateway resolved one, and the provider is called with
+		// the resolved id. The budget follows the flat path: the client's
+		// own value when it set one, the 1024 default otherwise.
+		params["model"] = model
+		params["max_tokens"] = commandcodeMaxTokens(p)
+		m["params"] = params
 		if _, hasThread := m["threadId"]; !hasThread {
 			m["threadId"] = uuid.New().String()
 		}
@@ -431,7 +457,7 @@ func buildCommandcodeBody(body []byte, model string) ([]byte, error) {
 			m["config"] = map[string]any{
 				"workingDir":    "/",
 				"date":          time.Now().UTC().Format("2006-01-02"),
-				"environment":   runtime.GOOS,
+				"environment":   providers.NodePlatform(),
 				"structure":     []any{},
 				"isGitRepo":     false,
 				"currentBranch": "",
@@ -440,88 +466,42 @@ func buildCommandcodeBody(body []byte, model string) ([]byte, error) {
 				"recentCommits": []any{},
 			}
 		}
-		return json.Marshal(m)
+		// marshalStable, not json.Marshal: CommandCode is a prefix-caching
+		// upstream, so the same logical request has to serialise identically
+		// or every call after the first misses the prompt cache.
+		return marshalStable(m)
 	}
 
-	params := make(map[string]any, len(m))
-	for k, v := range m {
-		params[k] = v
+	// Build params from an explicit whitelist (upstream openai-to-commandcode.js:187-199).
+	// Copying every client key leaks OpenAI-only fields (stream_options, store,
+	// metadata, tool_choice, …) into the provider payload.
+	params := map[string]any{
+		"model":      model,
+		"messages":   []any{},
+		"stream":     true,
+		"max_tokens": commandcodeMaxTokens(m),
 	}
-	if model != "" {
-		params["model"] = model
+	if temp, ok := m["temperature"]; ok && temp != nil {
+		params["temperature"] = temp
+	} else {
+		params["temperature"] = 0.3
 	}
-	params["stream"] = true
-	// Upstream caps generation via params.max_tokens (openaiToCommandCodeRequest
-	// parity: body.max_tokens ?? body.max_output_tokens ?? DEFAULT_MAX_TOKENS).
-	// Without it a "hi" ping can burn the budget on chain-of-thought and the
-	// gateway answers with a bare error event instead of text.
-	if _, ok := params["max_tokens"]; !ok {
-		if _, ok := params["max_output_tokens"]; !ok {
-			params["max_tokens"] = 1024
-		}
+	if top, ok := m["top_p"]; ok && top != nil {
+		params["top_p"] = top
+	}
+	if tools, ok := m["tools"].([]any); ok && len(tools) > 0 {
+		params["tools"] = commandcodeTools(convertOpenAIToolsToClaude(tools))
+	}
+	if effort, ok := m["reasoning_effort"]; ok && effort != nil {
+		params["reasoning_effort"] = effort
 	}
 
 	// CommandCode messages require content as array of blocks (never raw string)
 	if rawMsgs, ok := m["messages"].([]any); ok {
-		var systemTexts []string
-		convertedMsgs := make([]any, 0, len(rawMsgs))
-		for _, rawMsg := range rawMsgs {
-			msgMap, ok := rawMsg.(map[string]any)
-			if !ok {
-				continue
-			}
-			role, _ := msgMap["role"].(string)
-			contentVal := msgMap["content"]
-
-			if role == "system" || role == "developer" {
-				if s, ok := contentVal.(string); ok && s != "" {
-					systemTexts = append(systemTexts, s)
-				}
-				continue
-			}
-
-			var contentBlocks []any
-			if strContent, ok := contentVal.(string); ok {
-				contentBlocks = append(contentBlocks, map[string]any{
-					"type": "text",
-					"text": strContent,
-				})
-			} else if arrContent, ok := contentVal.([]any); ok {
-				for _, part := range arrContent {
-					if partMap, ok := part.(map[string]any); ok {
-						pType, _ := partMap["type"].(string)
-						if pType == "text" {
-							txt, _ := partMap["text"].(string)
-							contentBlocks = append(contentBlocks, map[string]any{
-								"type": "text",
-								"text": txt,
-							})
-						} else if imgBlock := toCommandcodeImageBlock(partMap); imgBlock != nil {
-							contentBlocks = append(contentBlocks, imgBlock)
-						} else if txt, ok := partMap["text"].(string); ok {
-							contentBlocks = append(contentBlocks, map[string]any{
-								"type": "text",
-								"text": txt,
-							})
-						}
-					}
-				}
-			} else {
-				contentBlocks = append(contentBlocks, map[string]any{
-					"type": "text",
-					"text": "",
-				})
-			}
-
-			convertedMsg := map[string]any{
-				"role":    role,
-				"content": contentBlocks,
-			}
-			convertedMsgs = append(convertedMsgs, convertedMsg)
-		}
-		params["messages"] = convertedMsgs
-		if len(systemTexts) > 0 {
-			params["system"] = strings.Join(systemTexts, "\n\n")
+		messages, system := commandcodeConvertMessages(rawMsgs)
+		params["messages"] = messages
+		if system != "" {
+			params["system"] = system
 		}
 	}
 
@@ -531,7 +511,7 @@ func buildCommandcodeBody(body []byte, model string) ([]byte, error) {
 		"config": map[string]any{
 			"workingDir":    "/",
 			"date":          time.Now().UTC().Format("2006-01-02"),
-			"environment":   runtime.GOOS,
+			"environment":   providers.NodePlatform(),
 			"structure":     []any{},
 			"isGitRepo":     false,
 			"currentBranch": "",
@@ -542,6 +522,10 @@ func buildCommandcodeBody(body []byte, model string) ([]byte, error) {
 		"params": params,
 	}
 
+	// json.Marshal is deliberate here: this path mints a fresh threadId on
+	// every request, so the body differs call to call whatever the member
+	// order is. The caller-shaped `params` path above keeps a supplied
+	// threadId and is the one that must stay byte-stable.
 	return json.Marshal(payload)
 }
 
@@ -1554,7 +1538,10 @@ func normalizeMuseSparkResponsesBody(body []byte, model string) ([]byte, error) 
 			}
 		}
 	}
-	return json.Marshal(m)
+	// marshalStable, not json.Marshal: opencode-go's muse-spark lane is a
+	// prefix-caching upstream and a body whose members reshuffle on every
+	// call turns each request after the first into a full cache miss.
+	return marshalStable(m)
 }
 
 // ForwardOpencodeGo handles requests for opencode-go (paid tier).

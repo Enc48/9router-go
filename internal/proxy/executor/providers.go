@@ -616,6 +616,7 @@ func ForwardOpencode(w http.ResponseWriter, req *Request) error {
 		// variants from Claude Code CLI are renamed here and restored on the
 		// response (translator.ConcealFingerprintTools).
 		transformedBody, toolNameMap := translator.ConcealOpenCodeV2FingerprintTools(transformedBody, true, isOpenCodeAutoToolChoiceModel(cleanModel))
+		transformedBody = translator.ApplyFingerprintSystemPrompt(transformedBody)
 		req.Ctx = translator.WithToolNameMap(req.Ctx, toolNameMap)
 		w = NewToolNameRestoringWriter(w, toolNameMap)
 
@@ -628,7 +629,7 @@ func ForwardOpencode(w http.ResponseWriter, req *Request) error {
 			for k, v := range req.Config.StaticHeaders {
 				cfg.StaticHeaders[k] = v
 			}
-			cfg.StaticHeaders["x-relay-path"] = "/inference/v1/responses"
+			cfg.StaticHeaders["x-relay-path"] = "/inference/openai/v1/responses"
 		} else {
 			baseURL := strings.TrimRight(cfg.BaseURL, "/")
 			baseURL = strings.TrimSuffix(baseURL, "/chat/completions")
@@ -675,6 +676,7 @@ func ForwardOpencode(w http.ResponseWriter, req *Request) error {
 	req.LiftReasoningAliases = true
 	// opencode Chat Completions path: same conceal + restore of tool names.
 	body, toolNameMap := translator.ConcealOpenCodeV2FingerprintTools(body, false, isOpenCodeAutoToolChoiceModel(cleanModel))
+	body = translator.ApplyFingerprintSystemPrompt(body)
 	req.Ctx = translator.WithToolNameMap(req.Ctx, toolNameMap)
 	w = NewToolNameRestoringWriter(w, toolNameMap)
 	// Strict models wrap caller tool calls as execute/CALL_TOOL; hand the
@@ -712,7 +714,7 @@ func ForwardOpencode(w http.ResponseWriter, req *Request) error {
 	cfg := *req.Config
 	if isRelayConfig(&cfg) {
 		cfg.StaticHeaders = copyHeaders(cfg.StaticHeaders)
-		cfg.StaticHeaders["x-relay-path"] = "/inference/v1/chat/completions"
+		cfg.StaticHeaders["x-relay-path"] = "/inference/openai/v1/chat/completions"
 		cfg.BaseURL = strings.TrimRight(cfg.BaseURL, "/") + "/chat/completions"
 	} else {
 		cfg.BaseURL = opencodeChatURL(cfg.BaseURL)
@@ -757,10 +759,10 @@ func ForwardOpencode(w http.ResponseWriter, req *Request) error {
 }
 
 // opencodeInferenceBase rewrites a zen-layout base URL to the v2 inference
-// gate's /inference/v1 prefix. Any host mirroring the zen layout follows the
+// gate's /inference/openai/v1 prefix. Any host mirroring the zen layout follows the
 // same migration, so the rewrite keys off the prefix rather than the host. A
 // base with no zen prefix — a custom endpoint, or the registry default that
-// already points at /inference/v1 — is returned untouched.
+// already points at /inference/openai/v1 — is returned untouched.
 func opencodeInferenceBase(base string) string {
 	base = strings.TrimRight(base, "/")
 	base = strings.TrimSuffix(base, "/chat/completions")
@@ -768,7 +770,31 @@ func opencodeInferenceBase(base string) string {
 	base = strings.TrimSuffix(base, "/responses")
 	switch {
 	case strings.HasSuffix(base, "/zen/v1"):
+		return strings.TrimSuffix(base, "/zen/v1") + "/inference/openai/v1"
+	case strings.HasSuffix(base, "/inference/openai/v1"):
+		return base
+	case strings.HasSuffix(base, "/inference/v1"):
+		return strings.TrimSuffix(base, "/inference/v1") + "/inference/openai/v1"
+	default:
+		return base
+	}
+}
+
+// opencodeMessagesInferenceBase keeps a zen-layout base URL on the legacy
+// /inference/v1 prefix: the v2 gate's /inference/openai/v1 surface has no
+// /messages route (404), while the legacy prefix still serves Claude
+// Messages. Mirrors opencodeInferenceBase, keyed off the prefix rather than
+// the host.
+func opencodeMessagesInferenceBase(base string) string {
+	base = strings.TrimRight(base, "/")
+	base = strings.TrimSuffix(base, "/chat/completions")
+	base = strings.TrimSuffix(base, "/messages")
+	base = strings.TrimSuffix(base, "/responses")
+	switch {
+	case strings.HasSuffix(base, "/zen/v1"):
 		return strings.TrimSuffix(base, "/zen/v1") + "/inference/v1"
+	case strings.HasSuffix(base, "/inference/openai/v1"):
+		return strings.TrimSuffix(base, "/inference/openai/v1") + "/inference/v1"
 	case strings.HasSuffix(base, "/inference/v1"):
 		return base
 	default:
@@ -783,7 +809,10 @@ func opencodeChatURL(base string) string {
 	}
 	trimmed := strings.TrimSuffix(base, "/chat/completions")
 	if strings.HasSuffix(trimmed, "/zen/v1") {
-		return strings.TrimSuffix(trimmed, "/zen/v1") + "/inference/v1/chat/completions"
+		return strings.TrimSuffix(trimmed, "/zen/v1") + "/inference/openai/v1/chat/completions"
+	}
+	if strings.HasSuffix(trimmed, "/inference/v1") {
+		return strings.TrimSuffix(trimmed, "/inference/v1") + "/inference/openai/v1/chat/completions"
 	}
 	return base
 }
@@ -1555,9 +1584,11 @@ func opencodeGoInferenceBase(base string) string {
 	base = strings.TrimSuffix(base, "/responses")
 	switch {
 	case strings.HasSuffix(base, "/zen/go/v1"):
-		return strings.TrimSuffix(base, "/zen/go/v1") + "/inference/v1"
-	case strings.HasSuffix(base, "/inference/v1"):
+		return strings.TrimSuffix(base, "/zen/go/v1") + "/inference/openai/v1"
+	case strings.HasSuffix(base, "/inference/openai/v1"):
 		return base
+	case strings.HasSuffix(base, "/inference/v1"):
+		return strings.TrimSuffix(base, "/inference/v1") + "/inference/openai/v1"
 	default:
 		return base
 	}
@@ -1570,6 +1601,7 @@ func opencodeGoInferenceBase(base string) string {
 func forwardOpencodeGoFree(w http.ResponseWriter, req *Request, cleanModel string) error {
 	body := InjectReasoningContent(req.Body, "opencode-go")
 	body, toolNameMap := translator.ConcealOpenCodeV2FingerprintTools(body, false, isOpenCodeAutoToolChoiceModel(cleanModel))
+	body = translator.ApplyFingerprintSystemPrompt(body)
 	req.Ctx = translator.WithToolNameMap(req.Ctx, toolNameMap)
 	w = NewToolNameRestoringWriter(w, toolNameMap)
 	// Same execute/CALL_TOOL bridge as the free chat lane: streaming only —
@@ -1592,7 +1624,7 @@ func forwardOpencodeGoFree(w http.ResponseWriter, req *Request, cleanModel strin
 	cfg := *req.Config
 	if isRelayConfig(&cfg) {
 		cfg.StaticHeaders = copyHeaders(cfg.StaticHeaders)
-		cfg.StaticHeaders["x-relay-path"] = "/inference/v1/chat/completions"
+		cfg.StaticHeaders["x-relay-path"] = "/inference/openai/v1/chat/completions"
 		cfg.BaseURL = strings.TrimRight(cfg.BaseURL, "/") + "/chat/completions"
 	} else {
 		cfg.BaseURL = opencodeGoInferenceBase(cfg.BaseURL) + "/chat/completions"

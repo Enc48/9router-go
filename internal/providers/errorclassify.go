@@ -132,12 +132,17 @@ var ModelFitErrorPatterns = []string{
 
 // ModelFitStatusCodes are the statuses an upstream uses to reject an oversized
 // request. A 400 carries it almost everywhere; 413 and 422 are the other two
-// spellings seen in the wild. Gating on the status keeps a provider's prose from
-// triggering the classification on an unrelated failure.
+// spellings seen in the wild, and Zed sends it as a 403. 403 is otherwise the
+// account-refusal status, so admitting it here means every 403 is re-checked
+// against the body patterns before it can be called a fit failure — a plain
+// permission refusal still lands on the generic 403 rule. Gating on the status
+// keeps a provider's prose from triggering the classification on an unrelated
+// failure.
 var ModelFitStatusCodes = map[int]bool{
 	http.StatusBadRequest:            true, // 400
 	http.StatusRequestEntityTooLarge: true, // 413
 	http.StatusUnprocessableEntity:   true, // 422
+	http.StatusForbidden:             true, // 403, Zed
 }
 
 // IsModelFitError reports whether an upstream failure means the chosen model is

@@ -441,6 +441,28 @@ func (h *ChatHandler) resolvePrefixProvider(prefix string, model string) *ModelI
 	}
 }
 
+// wireModelForNode rewrites a client-facing model id onto the id the node's
+// upstream gateway serves. A provider node publishes its models as
+// "<prefix>/<id>", and the prefix only routes the request to the node — the
+// gateway beyond it has never heard of it, so forwarding the prefixed id
+// verbatim answers 400 "no model endpoints" (kiro and zed strip their own
+// prefixes for the same reason). Only an exact "<prefix>/" match is removed;
+// a node with no prefix, a model requested unprefixed, and a registry
+// provider all pass through unchanged.
+func (h *ChatHandler) wireModelForNode(provider, model string) string {
+	if !isCompatibleProviderID(provider) {
+		return model
+	}
+	prefix := h.providerNodePrefixMap()[provider]
+	if prefix == "" {
+		return model
+	}
+	if rest, ok := strings.CutPrefix(model, prefix+"/"); ok {
+		return rest
+	}
+	return model
+}
+
 // resolveComboRouting retrieves the routing strategy, sticky limit, and judge model
 // for a combo, prioritizing per-combo settings, then global combo settings, then combo.Strategy.
 func (h *ChatHandler) resolveComboRouting(comboName string, fallbackStrategy string) (strategy string, stickyLimit int, judgeModel string) {

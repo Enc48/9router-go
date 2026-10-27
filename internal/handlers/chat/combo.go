@@ -681,7 +681,7 @@ func (h *ChatHandler) handleComboFallback(ctx context.Context, w http.ResponseWr
 					handlerutil.WriteJSONError(w, http.StatusBadRequest, "failed to parse request body")
 					return
 				}
-				upstreamBody["model"] = modelInfo.Model
+				upstreamBody["model"] = h.wireModelForNode(modelInfo.Provider, modelInfo.Model)
 				repairToolCallIDsInMap(upstreamBody)
 				ctx = h.applyJailbreak(ctx, upstreamBody, comboName, jailbreakLegIDs(modelInfo.Provider, modelInfo.Model)...)
 				upstreamJSON, err := json.Marshal(upstreamBody, json.Deterministic(true))
@@ -983,7 +983,7 @@ func (h *ChatHandler) handleMessagesComboFallback(ctx context.Context, w http.Re
 					handlerutil.WriteJSONError(w, http.StatusBadRequest, "failed to parse request body")
 					return
 				}
-				entryBody["model"] = modelInfo.Model
+				entryBody["model"] = h.wireModelForNode(modelInfo.Provider, modelInfo.Model)
 				ctx = h.applyJailbreak(ctx, entryBody, comboName, jailbreakLegIDs(modelInfo.Provider, modelInfo.Model)...)
 
 				upstreamJSON, err := json.Marshal(entryBody, json.Deterministic(true))

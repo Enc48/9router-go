@@ -208,7 +208,7 @@ func (h *ChatHandler) handleSingleModel(ctx context.Context, w http.ResponseWrit
 	// The client's model id is the jailbreak key; rewrite the body to the
 	// resolved upstream model first, then inject against the original id.
 	requestedModel, _ := upstreamBody["model"].(string)
-	upstreamBody["model"] = modelInfo.Model
+	upstreamBody["model"] = h.wireModelForNode(modelInfo.Provider, modelInfo.Model)
 	repairToolCallIDsInMap(upstreamBody)
 	ctx = h.applyJailbreak(ctx, upstreamBody, requestedModel, jailbreakLegIDs(modelInfo.Provider, modelInfo.Model)...)
 	upstreamJSON, err := json.Marshal(upstreamBody)
@@ -388,7 +388,7 @@ func (h *ChatHandler) handleMessagesSingleModel(ctx context.Context, w http.Resp
 	// The client's model id is the jailbreak key; rewrite the body to the
 	// resolved upstream model first, then inject against the original id.
 	requestedModel, _ := translatedReq["model"].(string)
-	translatedReq["model"] = modelInfo.Model
+	translatedReq["model"] = h.wireModelForNode(modelInfo.Provider, modelInfo.Model)
 	ctx = h.applyJailbreak(ctx, translatedReq, requestedModel, jailbreakLegIDs(modelInfo.Provider, modelInfo.Model)...)
 	finalBody, err := json.Marshal(translatedReq)
 	if err != nil {

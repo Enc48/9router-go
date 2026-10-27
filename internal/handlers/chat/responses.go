@@ -196,7 +196,7 @@ func (h *ChatHandler) newResponsesContext(r *http.Request, requestedModel string
 // client, and a Responses client is never one.
 func (h *ChatHandler) handleResponsesSingleModel(ctx context.Context, w http.ResponseWriter, preparedReq map[string]any, modelInfo *ModelInfo, isStream bool) {
 	cw := newCommittedResponseWriter(w)
-	preparedReq["model"] = modelInfo.Model
+	preparedReq["model"] = h.wireModelForNode(modelInfo.Provider, modelInfo.Model)
 	finalBody, err := json.Marshal(preparedReq)
 	if err != nil {
 		handlerutil.WriteJSONError(cw, http.StatusInternalServerError, "failed to marshal responses request")

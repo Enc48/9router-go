@@ -7,7 +7,7 @@ machine. Session rotation replayed into the same refusal because the limit was
 never the session's — the gate had tightened its genuineness check from the
 transport to the request body.
 
-Measured live on 2026-10-25 against `https://opencode.ai/inference/v1` (probe
+Measured live on 2026-10-25 against `https://opencode.ai/inference/openai/v1` (probe
 matrix in `internal/translator/opencode_free_harness.go`):
 
 - the system prompt must start with the CLI harness preamble (~8,247 chars

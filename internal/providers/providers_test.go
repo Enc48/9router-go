@@ -100,8 +100,18 @@ func TestKnownProviders_RequireClaudeToolType(t *testing.T) {
 
 func TestKnownProviders_StaticHeaders(t *testing.T) {
 	cfg := KnownProviders["opencode"]
-	if cfg.StaticHeaders["x-opencode-client"] != "desktop" {
-		t.Errorf("opencode expected static header x-opencode-client=desktop, got %q", cfg.StaticHeaders["x-opencode-client"])
+	if cfg.StaticHeaders["x-opencode-client"] != "cli" {
+		t.Errorf("opencode expected static header x-opencode-client=cli, got %q", cfg.StaticHeaders["x-opencode-client"])
+	}
+	if cfg.StaticHeaders["User-Agent"] != "opencode/latest/2.1.4/cli" {
+		t.Errorf("opencode expected User-Agent opencode/latest/2.1.4/cli, got %q", cfg.StaticHeaders["User-Agent"])
+	}
+	cfgZen := KnownProviders["opencode-zen"]
+	if cfgZen.StaticHeaders["x-opencode-client"] != "cli" {
+		t.Errorf("opencode-zen expected static header x-opencode-client=cli, got %q", cfgZen.StaticHeaders["x-opencode-client"])
+	}
+	if cfgZen.StaticHeaders["User-Agent"] != "opencode/1.19.4" {
+		t.Errorf("opencode-zen expected User-Agent opencode/1.19.4, got %q", cfgZen.StaticHeaders["User-Agent"])
 	}
 }
 

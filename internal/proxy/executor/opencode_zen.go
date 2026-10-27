@@ -196,7 +196,7 @@ func zenHeaders(cfg *providers.ProviderConfig, session string, stream bool, free
 	headers := proxy.BuildOpenCodeHeaders(nil, session, stream)
 	if !free {
 		// The keyed lane keeps the v1 identity: upstream leaves opencode-zen
-		// on opencode/1.18.31 + desktop while only the keyless free executor
+		// on opencode/1.19.4 + cli while only the keyless free executor
 		// moves to v2. Free-tier models keep the v2 cli identity above, which
 		// is what the inference gate expects alongside Bearer public.
 		headers["x-opencode-client"] = "desktop"

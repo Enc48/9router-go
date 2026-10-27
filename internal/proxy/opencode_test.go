@@ -132,7 +132,7 @@ func TestHasValidOpenCodeVersion(t *testing.T) {
 		{"opencode", false},
 		{"opencode/1.16.5", false},
 		{"opencode/1.17.0", false},
-		{"opencode/1.18.31", false},
+		{"opencode/1.19.4", false},
 		{"opencode/latest/2.0.0/cli", true},
 		{"opencode/latest/2.0.26/cli", true},
 		{"opencode/stable/2.0.26/desktop", true},

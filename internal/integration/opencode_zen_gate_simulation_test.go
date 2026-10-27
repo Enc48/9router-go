@@ -329,7 +329,7 @@ func TestInferenceGate_RawBodyIsRefused(t *testing.T) {
 		t.Fatalf("build request: %v", err)
 	}
 	// A plausible but non-compliant client: v1 UA, no session mirrors.
-	req.Header.Set("User-Agent", "opencode/1.18.31")
+	req.Header.Set("User-Agent", "opencode/1.19.4")
 	if got := gate.status(req, raw); got != http.StatusForbidden {
 		t.Errorf("raw client request got %d, want 403", got)
 	}
@@ -339,7 +339,7 @@ func TestInferenceGate_RawBodyIsRefused(t *testing.T) {
 
 	// The same body with compliant headers still fails on the tool contract.
 	gate = &inferenceGate{}
-	req.Header.Set("User-Agent", "opencode/latest/2.0.29/cli")
+	req.Header.Set("User-Agent", "opencode/latest/2.1.4/cli")
 	session := "ses_000000000000AAAAAAAAAAAAAA"
 	for _, h := range []string{"x-opencode-session", "x-opencode-session-id", "x-session-affinity", "x-session-id"} {
 		req.Header.Set(h, session)
@@ -416,7 +416,7 @@ func TestInferenceGate_ContractIsEnforced(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build request: %v", err)
 	}
-	req.Header.Set("User-Agent", "opencode/latest/2.0.29/cli")
+	req.Header.Set("User-Agent", "opencode/latest/2.1.4/cli")
 	session := "ses_000000000000AAAAAAAAAAAAAA"
 	for _, h := range []string{"x-opencode-session", "x-opencode-session-id", "x-session-affinity", "x-session-id"} {
 		req.Header.Set(h, session)

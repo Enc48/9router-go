@@ -4,7 +4,7 @@ import json "encoding/json/v2"
 
 // The OpenCode free-tier inference gate fingerprints the request body, not just
 // the transport: measured live on 2026-10-25 against
-// https://opencode.ai/inference/v1/chat/completions, a request whose system
+// https://opencode.ai/inference/openai/v1/chat/completions, a request whose system
 // prompt lacks the CLI harness preamble, or whose declared tools are not the
 // CLI's built-in definitions, is answered with 429 FreeUsageLimitError ("Free
 // models work in OpenCode") even though the transport fingerprint is perfect.

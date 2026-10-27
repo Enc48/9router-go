@@ -49,7 +49,7 @@ func liveOpenCodeEnabled() bool {
 }
 
 // liveOpenCodeEndpoint is the keyless inference gate for chat completions.
-const liveOpenCodeEndpoint = "https://opencode.ai/inference/v1/chat/completions"
+const liveOpenCodeEndpoint = "https://opencode.ai/inference/openai/v1/chat/completions"
 
 // liveRequest builds the request the gateway would emit for a free model: the
 // 2.x CLI identity, the mirrored session headers, the public credential, and no

@@ -77,7 +77,7 @@ describe('a draft holding numbers from number inputs', () => {
 
   it('summarises and gates the same as the string form', () => {
     assert.ok(hasAnyNodeLimit(typed()))
-    assert.strictEqual(nodeLimitsSummary(typed()), '60 rpm · 90k tpm · 4 conc · 15000 ms queue · 5M tok')
+    assert.strictEqual(nodeLimitsSummary(typed()), '60 rpm · 90k tpm · 4 conc · 15000 ms queue · 5M tok · 50k floor')
   })
 
   it('treats 0, negatives and fractions as unlimited', () => {

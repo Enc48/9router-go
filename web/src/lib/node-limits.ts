@@ -76,7 +76,6 @@ export function nodeLimitsPatchOf(draft: NodeLimitsDraft): ProviderNodeLimitsPat
     tokenQuota: countOf(draft.tokenQuota),
     queueTimeoutMs: countOf(draft.queueTimeoutMs),
     quotaFloor: countOf(draft.quotaFloor),
-    quotaFloor: countOf(draft.quotaFloor),
     contractExpiresAt: draft.contractExpiresAt ? `${draft.contractExpiresAt}T23:59:59Z` : '',
   }
 }

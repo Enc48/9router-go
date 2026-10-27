@@ -391,6 +391,14 @@ type createConnectionRequest struct {
 	Overwrite      bool `json:"overwrite"`
 }
 
+// isCompatibleNodeProviderID reports whether providerID names a custom
+// provider node rather than a registry provider.
+func isCompatibleNodeProviderID(providerID string) bool {
+	return strings.HasPrefix(providerID, "openai-compatible-") ||
+		strings.HasPrefix(providerID, "anthropic-compatible-") ||
+		strings.HasPrefix(providerID, "custom-embedding-")
+}
+
 // HandleCreateConnection handles POST /api/connections.
 // Builds the connection data payload (apiKey + providerSpecificData +
 // testStatus + proxyPoolId) and inserts the row with an explicit priority.
@@ -456,6 +464,47 @@ func (h *DashboardHandler) HandleCreateConnection(w http.ResponseWriter, r *http
 	// alongside the key (AddApiKeyModal sends defaultModel for compatible nodes).
 	if req.DefaultModel != "" {
 		dataMap["defaultModel"] = req.DefaultModel
+	}
+
+	// Upstream POST /api/providers rebuilds providerSpecificData from the node
+	// row for compatible providers: the node owns the public prefix, endpoint
+	// and name. If a connection is stored without them, /v1/models falls back
+	// to the internal "openai-compatible-chat-<uuid>" id, which is not a model
+	// alias any client can use. Keep unrelated keys the modal sent (for example
+	// assignedModel) while replacing the node-owned ones.
+	if isCompatibleNodeProviderID(req.Provider) {
+		node, nodeData, err := h.Repo.GetProviderNodeByID(req.Provider)
+		if err != nil {
+			handlerutil.WriteJSONError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if node == nil {
+			handlerutil.WriteJSONError(w, http.StatusNotFound, "Provider node not found")
+			return
+		}
+		if nodeData == nil {
+			handlerutil.WriteJSONError(w, http.StatusInternalServerError, "Provider node data is invalid")
+			return
+		}
+		psd, _ := dataMap["providerSpecificData"].(map[string]any)
+		if psd == nil {
+			psd = make(map[string]any)
+		}
+		psd["prefix"] = nodeData.Prefix
+		nodeType := ""
+		if node.Type != nil {
+			nodeType = *node.Type
+		}
+		if nodeType == "openai-compatible" {
+			psd["apiType"] = nodeData.APIType
+		} else {
+			delete(psd, "apiType")
+		}
+		psd["baseUrl"] = nodeData.BaseURL
+		if node.Name != nil {
+			psd["nodeName"] = *node.Name
+		}
+		dataMap["providerSpecificData"] = psd
 	}
 
 	dataStr := rawData

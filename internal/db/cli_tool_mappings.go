@@ -83,7 +83,7 @@ func (r *Repo) GetCliToolMappings(apiKeyID, toolID string) ([]CliToolMapping, er
 	if err != nil {
 		return nil, fmt.Errorf("get cli tool mappings: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []CliToolMapping
 	for rows.Next() {
 		var m CliToolMapping

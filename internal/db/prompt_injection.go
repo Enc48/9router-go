@@ -77,7 +77,7 @@ func (r *Repo) ListPromptInjectionTemplates() ([]*PromptInjectionTemplate, error
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var out []*PromptInjectionTemplate
 	for rows.Next() {
@@ -154,7 +154,7 @@ func (r *Repo) ListPromptInjections(targetType string) ([]*PromptInjectionDoc, e
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var out []*PromptInjectionDoc
 	for rows.Next() {

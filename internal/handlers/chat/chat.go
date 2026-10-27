@@ -144,6 +144,11 @@ func (h *ChatHandler) HandleChatCompletions(w http.ResponseWriter, r *http.Reque
 			h.handleFusion(ctx, w, body, modelInfo.ComboModels, modelInfo.Strategy, reqBody.Stream, false, reqBody.Model, modelInfo.StickyLimit, modelInfo.JudgeModel)
 			return
 		}
+		// Media from old turns rides in the history even when the current turn
+		// is text-only. When no candidate can serve it, strip it rather than
+		// let a text-only upstream reject the whole conversation on a block
+		// this turn does not need.
+		body = maybeStripLegacyMediaBytes(body, augmented)
 		h.handleComboFallback(ctx, w, body, augmented, comboStrategy, reqBody.Stream, false, reqBody.Model, modelInfo.StickyLimit, injected...)
 		return
 	}
@@ -154,6 +159,7 @@ func (h *ChatHandler) HandleChatCompletions(w http.ResponseWriter, r *http.Reque
 		targetEntry = modelInfo.Provider + "/" + modelInfo.Model
 	}
 	augmented, strat := h.AugmentModelsWithCapacityAdapter([]string{targetEntry}, requiredCaps, requestKeyID(r))
+	body = maybeStripLegacyMediaBytes(body, augmented)
 	if len(augmented) > 1 {
 		injected := augmented[:len(augmented)-1]
 		log.Info("chat", "capacity adapter auto-switch", "target", reqBody.Model, "switched_to", augmented[0], "caps", keysString(requiredCaps))
@@ -346,6 +352,13 @@ func (h *ChatHandler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			h.handleFusion(ctx, w, bodyJSON, modelInfo.ComboModels, modelInfo.Strategy, reqBody.Stream, translateResponse, reqBody.Model, modelInfo.StickyLimit, modelInfo.JudgeModel)
 			return
 		}
+		// Media from old turns rides in the history even when the current turn
+		// is text-only. When no candidate can serve it, strip it rather than
+		// let a text-only upstream reject the whole conversation on a block
+		// this turn does not need.
+		if cleaned, changed := maybeStripLegacyMedia(workingBody, augmented); changed {
+			workingBody = cleaned
+		}
 		h.handleMessagesComboFallback(ctx, w, workingBody, augmented, comboStrategy, reqBody.Stream, reqBody.Model, modelInfo.StickyLimit, injected...)
 		return
 	}
@@ -356,6 +369,9 @@ func (h *ChatHandler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		targetEntry = modelInfo.Provider + "/" + modelInfo.Model
 	}
 	augmented, strat := h.AugmentModelsWithCapacityAdapter([]string{targetEntry}, requiredCaps, requestKeyID(r))
+	if cleaned, changed := maybeStripLegacyMedia(workingBody, augmented); changed {
+		workingBody = cleaned
+	}
 	if len(augmented) > 1 {
 		injected := augmented[:len(augmented)-1]
 		log.Info("chat", "capacity adapter auto-switch messages", "target", reqBody.Model, "switched_to", augmented[0], "caps", keysString(requiredCaps))

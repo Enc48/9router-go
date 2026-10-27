@@ -116,6 +116,18 @@ var ModelFitErrorPatterns = []string{
 	"too many tokens",
 	"context window",
 	"exceeds the maximum number of tokens",
+	// A text-only model rejects the media an older turn still carries. The
+	// trailing turn was text, so the request never registered as a vision
+	// request and the history went out verbatim; every connection to this
+	// model answers the same way, so like the length patterns above the only
+	// useful move is the next member. The quoted spellings both matter: the
+	// body is matched raw, so a JSON-encoded message carries the quotes as
+	// \" while a plain-text error body carries them bare.
+	`unsupported value \"image`,
+	`unsupported value "image`,
+	"not support image",
+	"image input not supported",
+	"images are not supported",
 }
 
 // ModelFitStatusCodes are the statuses an upstream uses to reject an oversized

@@ -52,15 +52,6 @@ func (r *Repo) GetPromptInjectionEnabled() bool {
 }
 
 // SaveSettings persists the whole SettingsData row.
-func (r *Repo) PromptInjectionEnabled() bool {
-	s, err := r.GetSettings()
-	if err != nil || s == nil {
-		return false
-	}
-	return s.PromptInjectionEnabled
-}
-
-// SaveSettings persists the whole SettingsData row.
 func (r *Repo) SaveSettings(s *SettingsData) error {
 	if s == nil {
 		return fmt.Errorf("nil settings")

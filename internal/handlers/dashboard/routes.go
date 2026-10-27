@@ -160,6 +160,17 @@ func RegisterRoutes(r chi.Router, h *DashboardHandler) {
 		r.Get("/keys/{id}/cli-scope", h.HandleGetCliToolApiKey)
 		r.Put("/keys/{id}/cli-scope", h.HandleUpdateCliToolApiKey)
 
+		// Prompt Injection Pro: system prompt or chat script per global / API key / model / combo.
+		r.Get("/prompt-injection/setting", h.HandleGetPromptInjectionSetting)
+		r.Put("/prompt-injection/setting", h.HandlePutPromptInjectionSetting)
+		r.Get("/prompt-injection", h.HandleListPromptInjections)
+		r.Get("/prompt-injection/{id}", h.HandleGetPromptInjection)
+		r.Put("/prompt-injection", h.HandlePutPromptInjection)
+		r.Delete("/prompt-injection/{id}", h.HandleDeletePromptInjection)
+		r.Get("/prompt-injection/templates", h.HandleListPromptInjectionTemplates)
+		r.Put("/prompt-injection/templates", h.HandlePutPromptInjectionTemplate)
+		r.Delete("/prompt-injection/templates/{id}", h.HandleDeletePromptInjectionTemplate)
+
 		// F-3 Plans: reusable policy templates the keys inherit from.
 		r.Get("/plans", h.HandleListPlans)
 		r.Post("/plans", h.HandleCreatePlan)

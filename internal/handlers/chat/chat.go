@@ -77,6 +77,10 @@ func (h *ChatHandler) HandleChatCompletions(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	// CLI model mapping (routing:cli_mapping scope + CLI User-Agent gate)
+	// rewrites the slot before model policy or alias resolution sees it.
+	modelName = h.applyCliModelMapping(r, modelName)
+
 	// Per-key model policy runs after the bypass path — synthetic warmup and
 	// keepalive traffic never reaches a provider, so it is not an access
 	// request — and before resolveModel, so a denied model never reaches
@@ -273,6 +277,10 @@ func (h *ChatHandler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		handlerutil.WriteJSONError(w, http.StatusBadRequest, "missing model")
 		return
 	}
+
+	// CLI model mapping (routing:cli_mapping scope + CLI User-Agent gate)
+	// rewrites the slot before model policy or alias resolution sees it.
+	modelName = h.applyCliModelMapping(r, modelName)
 
 	// Per-key model policy: 403 before any translation work or connection
 	// selection.

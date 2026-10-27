@@ -595,6 +595,12 @@ func EnsureCoreSchema(db *sql.DB) error {
 	if err := EnsureThoughtSignatureTables(db); err != nil {
 		return err
 	}
+	if err := EnsurePromptInjectionTables(db); err != nil {
+		return err
+	}
+	if err := EnsureCliToolTables(db); err != nil {
+		return err
+	}
 	if err := EnsureAdditiveColumns(db); err != nil {
 		return err
 	}

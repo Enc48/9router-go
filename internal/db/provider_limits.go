@@ -132,7 +132,7 @@ func (r *Repo) ListProviderLimits(ctx context.Context) (map[string]ProviderLimit
 		var limits ProviderLimits
 		if err := rows.Scan(&id,
 			&limits.RPM, &limits.TPM, &limits.Concurrency, &limits.TokenQuota,
-			&limits.QueueTimeoutMs, &limits.QuotaResetID, &limits.ContractExpiresAt,
+			&limits.QueueTimeoutMs, &limits.QuotaResetID, &limits.QuotaFloor, &limits.ContractExpiresAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan provider limits: %w", err)
 		}

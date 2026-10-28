@@ -405,11 +405,11 @@ func TestResolveModel_UnusableNodeStillResolvesToTheNode(t *testing.T) {
 // floor is skipped even though the quota is not fully exhausted.
 func TestAcquireProviderAttempt_QuotaFloorSkipsNearExhaustedNodes(t *testing.T) {
 	tests := []struct {
-		name      string
-		quota     int
-		used      int
-		floor     int
-		wantDeny  bool
+		name     string
+		quota    int
+		used     int
+		floor    int
+		wantDeny bool
 	}{
 		{name: "no floor keeps usable node", quota: 100, used: 50, floor: 0, wantDeny: false},
 		{name: "unlimited quota ignores floor", quota: 0, used: 0, floor: 20, wantDeny: false},

@@ -4,7 +4,7 @@
   // API key sends under a Claude Code User-Agent to any routed model.
   import { onMount } from 'svelte'
   import { Plus, Trash2, RefreshCw } from 'lucide-svelte'
-  import { api, type APIKey, type CliToolMapping } from '../api/client'
+  import { api, type APIKey, type CliToolMapping } from '../../api/client'
 
   interface Props {
     apiKey: APIKey

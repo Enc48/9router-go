@@ -151,8 +151,15 @@ func (h *MediaHandler) HandleEmbeddings(w http.ResponseWriter, r *http.Request) 
 
 	// The stored Copilot token is exchanged material, not the OAuth credential:
 	// it expires on its own schedule, so it is checked (and re-minted when the
-	// recorded expiry has passed) before the request is built.
-	copilotToken := h.copilotTokenForRequest(r.Context(), conn, connData, apiKey)
+	// recorded expiry has passed) before the request is built. The token is a
+	// GitHub credential — upstream sends it only from the GitHub embeddings
+	// adapter (open-sse/handlers/embeddingProviders/github.js) — so the lookup
+	// is scoped to the GitHub provider: a connection for any other provider
+	// that happens to carry the key keeps its own Authorization header.
+	var copilotToken string
+	if providers.ResolveAlias(modelInfo.Provider) == "github" {
+		copilotToken = h.copilotTokenForRequest(r.Context(), conn, connData, apiKey)
+	}
 
 	req, err := buildRequest(copilotToken)
 	if err != nil {
